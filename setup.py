@@ -13,7 +13,7 @@ setup(
     version=get_property("__version__", "waldorf"),
     description="Waldorf, a distribution computing package based on celery",
     author="SErAphLi, taibende",
-    url="https://github.com/levelup-ai/waldorf.git",
+    url="https://github.com/levelupai/waldorf.git",
     packages=find_packages(),
     package_data={"waldorf": ["static/*", "static/*/*"]},
     install_requires=[

@@ -14,7 +14,7 @@ fi
 WALDORF_USER=waldorf
 WALDORF_MASTER_IP=127.0.0.1
 WALDORF_ENV_NAME=waldorf
-WALDORF_GIT_URL=https://github.com/levelup-ai/waldorf.git
+WALDORF_GIT_URL=https://github.com/levelupai/waldorf.git
 WALDORF_GIT_BRANCH=develop
 PIP_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
 PYTHON_VERSION=3.6.5

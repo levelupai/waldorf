@@ -81,7 +81,7 @@ for your own needs.
 ```bash
 mkdir waldorf_install
 cd waldorf_install
-git clone https://github.com/levelup-ai/waldorf.git
+git clone https://github.com/levelupai/waldorf.git
 cd waldorf
 # write a log
 script/waldorf_python_setup.sh | tee python_setup_log
@@ -136,7 +136,7 @@ You can view the cluster administration page at [http://127.0.0.1:61801/](http:/
 The gym demo can be run as follows:
 
 ```bash
-git clone https://github.com/levelup-ai/waldorf.git
+git clone https://github.com/levelupai/waldorf.git
 cd waldorf
 # enter a suitable Python virtualenv...
 pip install -U .
