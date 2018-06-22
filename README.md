@@ -40,7 +40,7 @@ administration webpage.
 
 You can use Waldorf on any task that requires parallel computing.
 
-One of its many uses is to compute rollouts in a MCTS simulation (for
+One of its many uses is to compute rollouts in an MCTS simulation (for
 example, in game-playing AIs).
 
 Here is a simple illustration:

@@ -20,7 +20,7 @@ recent Python interpreter, which provides a suitable environment for installing
 Waldorf.
 
 First, install the necessary C build tools. You will need to log into a user
-account that can has **sudo** privileges:
+account that has **sudo** privileges:
 
 ```bash
 # install C build tools
