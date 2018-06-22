@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Waldorf Master</title>
+    <link href="/static/css/darksalad.css" rel="stylesheet" type="text/css" media="all">
+
+    <script type="text/javascript" src="/static/js/jquery-3.3.1.min.js"></script>
+    <script type="text/javascript" src="/static/js/socket.io.slim.js"></script>
+    <script type="text/javascript" src="/static/js/sorttable.js"></script>
+    <script type="text/javascript" src="/static/js/waldorf.js"></script>
+
+    <link rel="shortcut icon" href="/static/images/favicon.ico" type="image/x-icon" />
+</head>
+<body>
+<div id="headerWrapper">
+    <h1 style="text-align:center;">Waldorf Master <span id="masterVersionSpan" style="font-size:16px;"></span> <span id="masterStatusSpan" style="background-color:#DBD48F; color:#222; font-size:16px; padding:5px 5px 0px 5px;">CONNECTING...</span> <span id="masterStatusTimer" style="font-size:16px;"></span></h1>
+</div>
+<div id="pageWrapper">
+    <p>Press the '?' key or <input type="button" onclick="showOverlay()" value="Click Here"/> for the Keyboard Shortcuts Guide</p>
+    <h2 onclick='toggleArrow("batchProcess", 300)'><span id="batchProcessArrow"><img src="/static/images/arrow_down.png" /></span> Batch CPU Settings Update <span style="font-size:14px;">[Shift + 1]</span></h2>
+    <div id="batchProcess" class="leftIndent">
+        <h3>Import Preset Configuration</h3>
+        <div id="fileDisplayArea"></div>
+        <div id="importConfig" class="leftIndent">
+            <div id="selectTextFile"><span style="color:#ccc">Import from text file: </span><input type="file" id="fileInput"/> </div>
+            <br />
+            <div id="selectExistingConfig">
+                Select an Existing Configuration: <span id="savedPresets"></span> <input type="submit" value="Delete Configuration" onclick="deleteConfig();" />
+                <form id="exportPresetsForm"></form>
+            </div>
+            <br />
+            <div>
+                <input type="submit" value="Import Configuration from Connected Slaves" onclick="createCpuEditingTable(null)"/>
+                <span id="importConfigMessages"></span>
+            </div>
+        </div>
+        <div id="batchExport">
+            <h3>Apply Configuration</h3>
+            <form id="batchExportForm"  class="leftIndent"></form>
+            <div id="editSettingsDiv"  class="leftIndent">Mode name: <input type="text" id="batchExportName" maxlength="20" value="Default" />
+                <p>
+                    <input type="submit" value="Batch Apply Settings" onclick="batchApplyCpuChanges()"/> <span id="applyBatchSettingsMessages"></span>
+                </p>
+                <p>
+                    <input type="submit" value="Save Settings" onclick="saveConfigToLocalStorage()"/>&nbsp;&nbsp;&nbsp;
+                    <input type="submit" value="Export Settings to File" onclick="exportFile()"/>
+                    <span id="batchExportMessages"></span>
+                </p>
+            </div>
+            <p/>
+        </div>
+    </div>
+    <h2 onclick='toggleArrow("singleMachine", 300)'><span id="singleMachineArrow"><img src="/static/images/arrow_down.png" /></span> Single Machine CPU Settings Update <span style="font-size:14px;">[Shift + 2]</span></h2>
+    <div id="singleMachine">
+        <form id="singleMachineForm"  class="leftIndent">
+            <select id="singleSelect" onchange="updateCoreSelector()" onfocus="freezeUpdates()">
+                <option></option>
+            </select>
+            <select id="coreSelect" onfocus="freezeUpdates()" onchange="unfreezeUpdates()">
+                <option></option>
+            </select>
+            <input type="button" value="Change CPU Allocation" onclick="applyCoreChange();"/>
+        </form>
+        <div id="singleMachineNotice" class="leftIndent"></div>
+    </div>
+
+    <h2 onclick='toggleArrow("tables", 300)'><span id="tablesArrow"><img src="/static/images/arrow_down.png" /></span> Table of Connections <span style="font-size:14px;">[Shift + 3]</span></h2>
+    <div id="tables">
+        <h3 class="leftIndent">Clients <span id="clientCounter"></span></h3>
+        <div id="offlineClientEvents" class="offlineEvents" onclick="this.innerHTML='';mostRecentHideClientTime=Date.now(); "></div>
+        <div id="clientsDiv" class="leftIndent"></div>
+        <h3 class="leftIndent">Slaves <span id="slaveCounter"></span></h3>
+
+        <div id="offlineSlaveEvents" class="offlineEvents" onclick="this.innerHTML='';mostRecentHideSlaveTime=Date.now();"></div>
+        <div id="slavesDiv" class="leftIndent"></div>
+    </div>
+
+
+    <div id="keyboardShortcutsGuide" onclick="hideOverlay()">
+        <div>
+            <h3 style="text-align:center;">Keyboard Shortcuts Guide</h3>
+            <table>
+                <thead><tr><th>Shortcut Key(s)</th><th>Explanation</th></tr></thead>
+                <tbody>
+                <tr><td>?</td><td>Show keyboard shortcuts guide.</td></tr>
+                <tr><td>Esc</td><td>Hide keyboard shortcuts guide.</td></tr>
+                <tr><td>Shift + 1</td><td>Expand / Collapse Batch CPU Settings.</td></tr>
+                <tr><td>Shift + 2</td><td>Expand / Collapse Single Machine CPU Settings.</td></tr>
+                <tr><td>Shift + 3</td><td>Expand / Collapse Table of Connections.</td></tr>
+                <tr><td>[</td><td>Show / Hide offline clients.</td></tr>
+                <tr><td>]</td><td>Show / Hide offline slaves.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+</body>
+</html>

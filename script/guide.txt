@@ -1,0 +1,5 @@
+chmod 755 start.sh
+crontab -e
+
+SHELL=/bin/bash
+@reboot ~/waldorf/script/start.sh &
