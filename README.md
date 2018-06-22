@@ -8,8 +8,7 @@ Waldorf is based on the [Celery distributed task queue](https://github.com/celer
 and takes its name from [Waldorf salad](https://en.wikipedia.org/wiki/Waldorf_salad),
 which also has celery as an ingredient.
 
-It can speed up algorithms such as [Monte Carlo Tree Search (MCTS)]
-(https://en.wikipedia.org/wiki/Monte_Carlo_tree_search) by
+It can speed up algorithms such as [Monte Carlo Tree Search (MCTS)](https://en.wikipedia.org/wiki/Monte_Carlo_tree_search) by
 spreading concurrent sub-tasks, written as Python functions, across multiple
 machines and automating the collection of outputs. Waldorf can also be used
 to implement MapReduce-style work-flows.

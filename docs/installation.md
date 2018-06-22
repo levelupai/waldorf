@@ -129,8 +129,7 @@ tmux a -t wds
 The Waldorf master listens on port 61801 and accepts HTTP and WebSocket
 connections.
 
-You can view the cluster administration page at [http://127.0.0.1:61801/]
-(http://127.0.0.1:61801/)
+You can view the cluster administration page at [http://127.0.0.1:61801/](http://127.0.0.1:61801/)
 
 ## Run the client demo
 
