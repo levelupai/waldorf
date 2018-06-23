@@ -100,7 +100,7 @@ function showOverlay() {
 }
 
 function stringifyCPUTable() {
-  var modeName = document.getElementById('batchExportName').value;
+  var modeName = escape(document.getElementById('batchExportName').value);
   var buffer = '{\n    "config_name": "' + modeName + '",\n';
   buffer += '    "machines": {\n';
   for (var prop in exportTableSettings) {
@@ -735,7 +735,7 @@ $(document).ready(function() {
     // Append newly created table to HTML div
     var divContainer = document.getElementById(tableDivName + 'Div');
     var headRowClassName = []
-    if (tableDivName=='slaves' && divContainer.childNodes.length > 0) {
+    if (tableDivName=='slaves' && divContainer.childNodes.length >= 3) {
       var existingTable = divContainer.childNodes[3];
       if (existingTable.tHead !== undefined) {
         headrow = existingTable.tHead.rows[0].cells;
