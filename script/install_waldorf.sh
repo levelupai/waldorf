@@ -46,11 +46,25 @@ sudo su - $WALDORF_USER -c \
 sudo su - $WALDORF_USER -c "cd waldorf && "\
 "git checkout -b $WALDORF_GIT_BRANCH origin/$WALDORF_GIT_BRANCH 2>/dev/null"
 
+# Copy config.sh to Waldorf user's directory
+sudo cp ${SCRIPT_DIR}/config.sh $WALDORF_HOME/waldorf/script/
+# Change file ownership to Waldorf user
+sudo chown -R $WALDORF_USER:$WALDORF_USER $WALDORF_HOME/waldorf/script/
+
 # Set up crontab (automatically start Waldorf on reboot)
-sudo su - $WALDORF_USER -c \
+USER_CRONTAB=`sudo su - $WALDORF_USER -c "crontab -l" 2>/dev/null`
+# User already has crontab file
+if [ $? = 0 ]; then
+  sudo su - $WALDORF_USER -c \
 "(printf \"SHELL=/bin/bash\n"\
-"@reboot ~/waldorf/script/start_$WALDORF_MODE.sh &\n\") "\
+"@reboot ~/waldorf/script/start_$WALDORF_MODE.sh &\n\"; crontab -l) "\
 "| sort -r - | uniq - | crontab -"
+else
+  sudo su - $WALDORF_USER -c \
+"(printf \"SHELL=/bin/bash\n"\
+"@reboot ~/waldorf/script/start_$WALDORF_MODE.sh &\n\";) "\
+"| sort -r - | uniq - | crontab -"
+fi
 
 # Start Waldorf
 sudo su - $WALDORF_USER -c "~/waldorf/script/start_$WALDORF_MODE.sh"
