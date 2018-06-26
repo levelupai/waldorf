@@ -22,6 +22,7 @@ import socket
 import billiard.exceptions
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
+import Crypto.Util.number
 import traceback
 
 
@@ -305,6 +306,17 @@ class _WaldorfSio(mp.Process):
         pbar.close()
         self.logger.debug('leave on_map')
 
+    def encrypt(self, cipher, info):
+        """Resolve "ValueError: Plaintext is too long." in Crypto."""
+        key_len = Crypto.Util.number.ceil_div(Crypto.Util.number.size(
+            cipher._key.n), 8)
+        length = key_len - 20
+        cipher_text = b''
+        for i in range(0, len(info), length):
+            cipher_text += cipher.encrypt(info[i:i + length])
+        cipher_text = base64.b64encode(cipher_text)
+        return cipher_text
+
     def on_gen_git_c(self, info):
         """Generate git credential.
 
@@ -319,7 +331,7 @@ class _WaldorfSio(mp.Process):
         self._public_pem = self.info['gen_git_c_resp'].encode()
         rsa_key = RSA.importKey(self._public_pem)
         cipher = PKCS1_v1_5.new(rsa_key)
-        cipher_text = base64.b64encode(cipher.encrypt(info))
+        cipher_text = self.encrypt(cipher, info)
         self.put(cipher_text)
 
     def on_clean_up(self):

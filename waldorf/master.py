@@ -15,6 +15,7 @@ import asyncio
 from Crypto import Random
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
+import Crypto.Util.number
 import os
 import base64
 import pickle
@@ -360,6 +361,17 @@ class ClientNamespace(socketio.AsyncNamespace):
         await self.emit(_WaldorfAPI.CHECK_SLAVE + '_resp',
                         self.up.slave_ns.connections, room=sid)
 
+    def decrypt(self, cipher, info):
+        """Resolve "ValueError: Plaintext is too long." in Crypto."""
+        info = base64.b64decode(info)
+        key_len = Crypto.Util.number.ceil_div(Crypto.Util.number.size(
+            cipher._key.n), 8)
+        decrypted = b''
+        for i in range(0, len(info), key_len):
+            decrypted += cipher.decrypt(info[i:i + key_len],
+                                        self.up.random_generator)
+        return decrypted
+
     async def on_get_env(self, sid, args):
         """Receive client's get env request.
 
@@ -370,9 +382,8 @@ class ClientNamespace(socketio.AsyncNamespace):
         name, pairs, suites, cfg = obj_decode(args)
         if cfg.env_cfg.git_credential is not None:
             try:
-                cred = base64.b64decode(cfg.env_cfg.git_credential)
-                decrypted = self.up._private_cipher.decrypt(
-                    cred, self.up.random_generator)
+                decrypted = self.decrypt(self.up._private_cipher,
+                                         cfg.env_cfg.git_credential)
                 cfg.env_cfg.git_credential = pickle.loads(decrypted)
             except:
                 await self.emit(_WaldorfAPI.GET_ENV + '_resp',
