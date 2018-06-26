@@ -49,7 +49,7 @@ sudo su - $WALDORF_USER -c "cd waldorf && "\
 # Set up crontab (automatically start Waldorf on reboot)
 sudo su - $WALDORF_USER -c \
 "(printf \"SHELL=/bin/bash\n"\
-"@reboot ~/waldorf/script/start_$WALDORF_MODE.sh &\n\") "\
+"@reboot ~/waldorf/script/start_$WALDORF_MODE.sh &\n\"; crontab -l) "\
 "| sort -r - | uniq - | crontab -"
 
 # Start Waldorf
