@@ -83,7 +83,11 @@ mkdir waldorf_install
 cd waldorf_install
 git clone https://github.com/levelupai/waldorf.git
 cd waldorf
-# write a log
+# The default configuration settings are OK for this tutorial, but you can
+# edit the configuration settings first using the text editor of your choice,
+# e.g.
+nano script/config.sh
+# run the Python script and write a logfile
 script/waldorf_python_setup.sh | tee python_setup_log
 ```
 
