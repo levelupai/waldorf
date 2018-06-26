@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# read args
 if [ $# -lt 1 ]; then
   echo "Required arg: master | slave"
   exit 1
@@ -10,15 +11,17 @@ else
   WALDORF_MODE=$1
 fi
 
-## USER DEFINED VARIABLES ##
-WALDORF_USER=waldorf
-WALDORF_MASTER_IP=127.0.0.1
-WALDORF_ENV_NAME=waldorf
-WALDORF_GIT_URL=https://github.com/levelupai/waldorf.git
-WALDORF_GIT_BRANCH=master
-PIP_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
-PYTHON_VERSION=3.6.5
-## END OF USER DEFINED VARIABLES
+
+# Import configuration variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# Check config file exists
+[ -f ${SCRIPT_DIR}/config.sh ] || \
+echo "You must create a config.sh file in the script directory." \
+"See config.sh.example in the script directory for a reference."
+# Exit if config file not found
+[ -f ${SCRIPT_DIR}/config.sh ] || exit 1
+# Load config
+source ${SCRIPT_DIR}/config.sh
 
 
 WALDORF_HOME=/home/$WALDORF_USER

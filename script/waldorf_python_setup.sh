@@ -4,23 +4,17 @@
 # specified mirror, compiles it and prepares an environment suitable
 # for installing Waldorf
 
-## USER DEFINED VARIABLES ##
-# Waldorf user name
-WALDORF_USER=waldorf
-# Waldorf user password (change this!)
-WALDORF_USER_PASSWD=123456
-# Python version
-PYTHON_VERSION=3.6.5
-# Python mirror (mainland China)
-PYTHON_MIRROR=http://mirrors.sohu.com/python/
-# Download URL and details for Python Virtualenv (mainland China mirror)
-VIRTUALENV_VERSION=15.2.0
-VIRTUALENV_EXTENSION=tar.gz
-VIRTUALENV_DOWNLOAD_URL="https://pypi.tuna.tsinghua.edu.cn/packages/b1/72"\
-"/2d70c5a1de409ceb3a27ff2ec007ecdd5cc52239e7c74990e32af57affe9/"\
-"virtualenv-15.2.0.tar.gz#md5=b5f6b473140cc627d19d0d203f3b63cc"
-## END OF USER DEFINED VARIABLES ##
 
+# Import configuration variables
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+# Check config file exists
+[ -f ${SCRIPT_DIR}/config.sh ] || \
+echo "You must create a config.sh file in the script directory." \
+"See config.sh.example in the script directory for a reference."
+# Exit if config file not found
+[ -f ${SCRIPT_DIR}/config.sh ] || exit 1
+# Load config
+source ${SCRIPT_DIR}/config.sh
 
 
 WALDORF_HOME=/home/$WALDORF_USER
@@ -41,33 +35,52 @@ fi
 
 # Download Python interpreter source code
 sudo su - $WALDORF_USER -c "mkdir -p $PYTHON_SOURCE_DIR"
+
 sudo su - $WALDORF_USER -c "mkdir -p $PYTHON_INSTALL_DIR"
+
 sudo su - $WALDORF_USER -c "cd $PYTHON_SOURCE_DIR && "\
 "wget $PYTHON_URL"
+
+
+
 #Download Virtualenv too but don't build it yet
 sudo su - $WALDORF_USER -c "cd $PYTHON_SOURCE_DIR && "\
 "wget $VIRTUALENV_DOWNLOAD_URL"
+
+
+
 # Unpack and build Python interpreter
 sudo su - $WALDORF_USER -c "cd $PYTHON_SOURCE_DIR && "\
 "tar xf Python-${PYTHON_VERSION}.tgz"
+
 sudo su - $WALDORF_USER -c "cd $PYTHON_BUILD_DIR && "\
 "./configure --enable-optimizations --prefix=$PYTHON_INSTALL_DIR"
+
 sudo su - $WALDORF_USER -c "cd $PYTHON_BUILD_DIR && "\
 "make"
+
 sudo su - $WALDORF_USER -c "cd $PYTHON_BUILD_DIR && "\
 "make test"
+
 sudo su - $WALDORF_USER -c "cd $PYTHON_BUILD_DIR && "\
 "make install"
+
+
 
 # Install Virtualenv
 PYTHON_INTERPRETER_BIN="$PYTHON_INSTALL_DIR/bin/"\
 "`ls $PYTHON_INSTALL_DIR/bin | grep python | head -1`"
+
 sudo su - $WALDORF_USER -c "cd $PYTHON_SOURCE_DIR && "\
 "tar xf virtualenv-$VIRTUALENV_VERSION.$VIRTUALENV_EXTENSION"
+
 sudo su - $WALDORF_USER -c "cd $PYTHON_SOURCE_DIR/virtualenv-"\
 "$VIRTUALENV_VERSION && $PYTHON_INTERPRETER_BIN ./setup.py install"
+
 sudo su - $WALDORF_USER -c "$PYTHON_INSTALL_DIR/bin/virtualenv "\
 "-p $PYTHON_INTERPRETER_BIN $PYTHON_VIRTUALENVS_DIR/$WALDORF_USER"
+
+
 
 # Tidy up permissions if needed
 sudo chown -R $WALDORF_USER:$WALDORF_USER $WALDORF_HOME
