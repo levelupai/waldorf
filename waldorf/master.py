@@ -266,8 +266,11 @@ class ClientNamespace(socketio.AsyncNamespace):
         Collect information from the cookie and update server table.
         """
         self.up.logger.debug('on_connect')
-        cookie = http.cookies.BaseCookie(environ['HTTP_COOKIE'])
-        info = obj_decode(cookie['info'].value)
+        self.info['sid'][sid] = {}
+        self.info['sid'][sid]['environ'] = environ
+
+    async def on_get_info_resp(self, sid, info):
+        info = obj_decode(info)
         uid = info['uid']
         hostname = info['hostname']
         version = info['ver']
@@ -290,8 +293,7 @@ class ClientNamespace(socketio.AsyncNamespace):
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.info['uid'][uid]['sid'] = sid
         self.info['uid'][uid]['hostname'] = hostname
-        self.info['uid'][uid]['environ'] = environ
-        self.info['sid'][sid] = uid
+        self.info['sid'][sid]['uid'] = uid
         self.connections[uid] = hostname
         self.properties[uid] = {
             'Hostname': hostname,
@@ -326,7 +328,7 @@ class ClientNamespace(socketio.AsyncNamespace):
         Update table and remove active connections.
         """
         self.up.logger.debug('on_disconnect')
-        uid = self.info['sid'][sid]
+        uid = self.info['sid'][sid]['uid']
         self.up.md_table.remove_object(uid + '_c')
         self.properties.pop(uid, None)
         self.info['sid'].pop(sid, None)
@@ -378,7 +380,7 @@ class ClientNamespace(socketio.AsyncNamespace):
         Setup environment on slave. Git credential will be decoded on master.
         """
         self.up.logger.debug('on_get_env')
-        uid = self.info['sid'][sid]
+        uid = self.info['sid'][sid]['uid']
         name, pairs, suites, cfg = obj_decode(args)
         if cfg.env_cfg.git_credential is not None:
             try:
@@ -472,8 +474,12 @@ class SlaveNamespace(socketio.AsyncNamespace):
         Collect information from the cookie and update server table.
         """
         self.up.logger.debug('on_connect')
-        cookie = http.cookies.BaseCookie(environ['HTTP_COOKIE'])
-        info = obj_decode(cookie['info'].value)
+        self.info['sid'][sid] = {}
+        self.info['sid'][sid]['environ'] = environ
+
+    async def on_get_info_resp(self, sid, info):
+        self.up.logger.debug('on_get_info_resp')
+        info = obj_decode(info)
         uid = info['uid']
         hostname = info['hostname']
         version = info['ver']
@@ -495,8 +501,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.info['uid'][uid]['sid'] = sid
         self.info['uid'][uid]['hostname'] = hostname
-        self.info['uid'][uid]['environ'] = environ
-        self.info['sid'][sid] = uid
+        self.info['sid'][sid]['uid'] = uid
         self.enter_room(sid, 'slave')
         self.connections[uid] = hostname
         self.properties[uid] = {
@@ -535,7 +540,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
         and the state to offline. So the user will know
         when the slave disconnected when they checkout the master index page.
         """
-        uid = self.info['sid'][sid]
+        uid = self.info['sid'][sid]['uid']
         self.info['sid'].pop(sid, None)
         if uid in self.exit_dict:
             self.up.logger.debug('slave {} disconnect, uid: {}.'.format(
@@ -568,7 +573,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
         uid, hostname, resp = args
         self.up.logger.debug('on_get_env_resp')
         self.up.logger.debug('get response from {}'.format(
-            self.info['uid'][self.info['sid'][sid]]['hostname']))
+            self.info['uid'][self.info['sid'][sid]['uid']]['hostname']))
         if uid not in self.up.client_ns.info['uid']:
             return
         self.up.client_ns.info['uid'][uid]['get_env_count'].remove(hostname)
@@ -587,7 +592,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
         # TODO: move client side wait to master? like get_env
         self.up.logger.debug('on_echo_resp')
         self.up.logger.debug('get response from {}'.format(
-            self.info['uid'][self.info['sid'][sid]]['hostname']))
+            self.info['uid'][self.info['sid'][sid]['uid']]['hostname']))
         await self.up.client_ns.emit(
             _WaldorfAPI.ECHO + '_resp', 'slave_' + sid, room=client_sid)
 
@@ -596,12 +601,12 @@ class SlaveNamespace(socketio.AsyncNamespace):
         # TODO: move client side wait to master? like get_env
         self.up.logger.debug('on_freeze_resp')
         self.up.logger.debug('get response from {}'.format(
-            self.info['uid'][self.info['sid'][sid]]['hostname']))
+            self.info['uid'][self.info['sid'][sid]['uid']]['hostname']))
         await self.up.client_ns.emit(
             _WaldorfAPI.FREEZE + '_resp', 'slave_' + sid, room=client_sid)
 
     def on_change_core_resp(self, sid, resp):
-        uid = self.info['sid'][sid]
+        uid = self.info['sid'][sid]['uid']
         self.up.admin_ns.info['change_core_resp'][uid] = resp
         if resp[0] == 0:
             self.properties[uid]['USED_CORES'] = \

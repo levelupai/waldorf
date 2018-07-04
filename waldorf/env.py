@@ -185,6 +185,10 @@ class PExpect(object):
         self.default_expect = default_expect
         self.timeout = default_timeout
         self.sess = pexpect.spawn(spawn)
+        self.sess.delayafterclose = 1
+        self.sess.delayafterterminate = 1
+        self.sess.ptyproc.delayafterclose = 1
+        self.sess.ptyproc.delayafterterminate = 1
         self.sess.logfile_read = sys.stdout.buffer
         self.expect(self.default_expect)
         self.sess.setwinsize(200, 480)
@@ -235,7 +239,6 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
                                  default_timeout=self.default_timeout)
 
     def close_sess(self):
-        time.sleep(0.2)
         self._tmp_sess.close()
 
     def create_env(self, path=None):
