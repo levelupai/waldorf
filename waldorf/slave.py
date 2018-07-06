@@ -113,6 +113,7 @@ class CeleryWorker(mp.Process):
 
 class SockWaitThread(threading.Thread):
     """Handle sock wait in an individual thread"""
+
     def __init__(self, up):
         super(SockWaitThread, self).__init__()
         self.up = up
@@ -147,18 +148,16 @@ class _WaldorfSio(mp.Process):
         self.uid = str(uuid.uuid4())
         self.setup_logger()
         self.system_info = get_system_info()
-        info = {'uid': self.uid,
-                'hostname': socket.gethostname(),
-                'ver': waldorf.__version__,
-                'ip': get_local_ip(),
-                'os': self.system_info.os,
-                'cpu_type': self.system_info.cpu_type,
-                'cpu_count': self.system_info.cpu_count,
-                'cfg_core': self.cfg.core,
-                'mem': self.system_info.mem}
-        self.cookies = {'info': obj_encode(info)}
-        self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port,
-                             cookies=self.cookies)
+        self.waldorf_info = {'uid': self.uid,
+                             'hostname': socket.gethostname(),
+                             'ver': waldorf.__version__,
+                             'ip': get_local_ip(),
+                             'os': self.system_info.os,
+                             'cpu_type': self.system_info.cpu_type,
+                             'cpu_count': self.system_info.cpu_count,
+                             'cfg_core': self.cfg.core,
+                             'mem': self.system_info.mem}
+        self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port)
         self.logger.debug('Connect to {}:{} with uid {}'.format(
             self.cfg.master_ip, self.cfg.waldorf_port, self.uid))
         self.slave_ns = self.sock.define(Namespace, '/slave')
@@ -203,6 +202,7 @@ class _WaldorfSio(mp.Process):
 
 class CheckCPUThread(threading.Thread):
     """Monitor CPU usage and change w_prefetch_multi argument dynamically."""
+
     def __init__(self, q):
         super(CheckCPUThread, self).__init__()
         self.q = q
@@ -225,6 +225,7 @@ class CheckCPUThread(threading.Thread):
 
 class Namespace(SocketIONamespace):
     """Slave namespace."""
+
     def setup(self, up: _WaldorfSio):
         self.up = up
         self.info = {}
@@ -236,6 +237,8 @@ class Namespace(SocketIONamespace):
         self.check_thread.start()
         self.w_prefetch_multi = 4
         self.busy = False
+        self.emit(_WaldorfAPI.GET_INFO + '_resp',
+                  obj_encode(self.up.waldorf_info))
         threading.Thread(target=self.update, daemon=True).start()
 
     def update(self):
@@ -261,9 +264,14 @@ class Namespace(SocketIONamespace):
             self.up.logger.debug(msg)
 
     def on_connect(self):
-        self.log('on_connect')
+        print('on_connect')
 
-    def get_info(self, uid):
+    def on_reconnect(self):
+        self.log('on_reconnect')
+        self.emit(_WaldorfAPI.GET_INFO + '_resp',
+                  obj_encode(self.up.waldorf_info))
+
+    def get_info_dict(self, uid):
         if uid not in self.info:
             self.info[uid] = {}
             self.info[uid]['tasks'] = []
@@ -275,7 +283,7 @@ class Namespace(SocketIONamespace):
     def get_env(self, uid, args):
         """Set up virtual environment."""
         self.busy = True
-        info = self.get_info(uid)
+        info = self.get_info_dict(uid)
         name, pairs, suites, cfg = pickle.loads(base64.b64decode(args))
         info['get_env'] = [name, pairs, suites, cfg]
         self.env = WaldorfEnv(name, cfg)
@@ -291,7 +299,7 @@ class Namespace(SocketIONamespace):
 
     def on_reg_task(self, uid, task_name, task_code, opts):
         self.log('on_reg_task')
-        info = self.get_info(uid)
+        info = self.get_info_dict(uid)
         info['tasks'].append([task_name, task_code, opts])
 
     def setup_worker(self, args):
@@ -313,7 +321,7 @@ class Namespace(SocketIONamespace):
         self.busy = True
         self.log('on_freeze')
         args = [uid, self.env.get_py_path(), self.env.get_env_path(),
-                self.get_info(uid)['tasks']]
+                self.get_info_dict(uid)['tasks']]
         self.workers[uid] = args
         args = copy.deepcopy(args)
         args.extend([self.w_prefetch_multi, self.up.cfg])
@@ -345,6 +353,7 @@ class Namespace(SocketIONamespace):
         try:
             # Set up affinity.
             self.up.cfg.core = core
+            self.up.waldorf_info['cfg_core'] = core
             self.affinity = [i for i in range(mp.cpu_count())][
                             -self.up.cfg.core:]
 

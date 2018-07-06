@@ -124,19 +124,18 @@ class _WaldorfSio(mp.Process):
         self.rt.start()
 
         # Collect information.
-        info = {'uid': self.uid,
-                'hostname': socket.gethostname(),
-                'ver': waldorf.__version__,
-                'ip': get_local_ip(),
-                'os': self.system_info.os,
-                'cpu_type': self.system_info.cpu_type,
-                'cpu_count': self.system_info.cpu_count,
-                'mem': self.system_info.mem}
-        self.cookies = {'info': obj_encode(info)}
+        self.waldorf_info = {'uid': self.uid,
+                             'hostname': socket.gethostname(),
+                             'ver': waldorf.__version__,
+                             'ip': get_local_ip(),
+                             'os': self.system_info.os,
+                             'cpu_type': self.system_info.cpu_type,
+                             'cpu_count': self.system_info.cpu_count,
+                             'cfg_core': self.cfg.core,
+                             'mem': self.system_info.mem}
 
         # Connect to Waldorf master.
-        self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port,
-                             cookies=self.cookies)
+        self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port)
         self.logger.debug('Connect to {}:{} with uid {}'.format(
             self.cfg.master_ip, self.cfg.waldorf_port, self.uid))
         self.client_ns = self.sock.define(Namespace, '/client')
@@ -372,10 +371,17 @@ class _WaldorfSio(mp.Process):
 class Namespace(SocketIONamespace):
     def setup(self, up: _WaldorfSio):
         self.up = up
+        self.emit(_WaldorfAPI.GET_INFO + '_resp',
+                  obj_encode(self.up.waldorf_info))
 
     def log(self, msg: str):
         if hasattr(self, 'up'):
             self.up.logger.debug(msg)
+
+    def on_reconnect(self):
+        self.log('on_reconnect')
+        self.emit(_WaldorfAPI.GET_INFO + '_resp',
+                  obj_encode(self.up.waldorf_info))
 
     def on_echo_resp(self, resp):
         self.log('on_echo_resp')

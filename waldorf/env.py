@@ -6,6 +6,7 @@ import sys
 import re
 import traceback
 from waldorf.cfg import WaldorfCfg
+import time
 
 
 class EnvCmd(object):
@@ -184,6 +185,10 @@ class PExpect(object):
         self.default_expect = default_expect
         self.timeout = default_timeout
         self.sess = pexpect.spawn(spawn)
+        self.sess.delayafterclose = 1
+        self.sess.delayafterterminate = 1
+        self.sess.ptyproc.delayafterclose = 1
+        self.sess.ptyproc.delayafterterminate = 1
         self.sess.logfile_read = sys.stdout.buffer
         self.expect(self.default_expect)
         self.sess.setwinsize(200, 480)
@@ -247,6 +252,7 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
             cmd = '$HOME/Python/3.6.5/bin/virtualenv ' + self.name
         self.run_cmd(cmd)
         self.update_env_list()
+        self.close_sess()
         if self.name not in self._env_list:
             raise Exception('Fail to create virtual environment.')
 
@@ -259,6 +265,7 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
         cmd = 'rm -rf ' + self.name
         self.run_cmd(cmd)
         self.update_env_list()
+        self.close_sess()
         assert self.name not in self._env_list
         print('Environment {} is removed'.format(self.name))
 
