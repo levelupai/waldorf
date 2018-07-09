@@ -290,7 +290,7 @@ class ClientNamespace(socketio.AsyncNamespace):
         self.info['uid'][uid]['uid'] = uid
         self.info['uid'][uid]['connect_time'] = time.time()
         self.info['uid'][uid]['connect_time_readable'] = \
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.info['uid'][uid]['sid'] = sid
         self.info['uid'][uid]['hostname'] = hostname
         self.info['sid'][sid]['uid'] = uid
@@ -498,7 +498,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
                             waldorf.__version__, room=sid)
         self.info['uid'][uid]['connect_time'] = time.time()
         self.info['uid'][uid]['connect_time_readable'] = \
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.info['uid'][uid]['sid'] = sid
         self.info['uid'][uid]['hostname'] = hostname
         self.info['sid'][sid]['uid'] = uid
@@ -553,7 +553,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
             self.properties[uid]['State'] = 'Offline(Abnormally)'
         self.info['uid'][uid]['disconnect_time'] = time.time()
         self.info['uid'][uid]['disconnect_time_readable'] = \
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.properties[uid]['DisconnectTime'] = \
             self.info['uid'][uid]['disconnect_time_readable']
         self.up.md_table.update_object(uid + '_s', self.properties[uid])

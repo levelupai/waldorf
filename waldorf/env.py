@@ -296,14 +296,15 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
             output = output.decode()
             m = re.search("Cloning into '(.*)'\.\.\.", output, flags=re.M)
             folder_name = m.group(1)
-            Username = self.git_credential[repo]['Username']
-            Password = self.git_credential[repo]['Password']
+            credential = self.get_credential(repo)
+            Username = credential['Username']
+            Password = credential['Password']
             self._tmp_sess.sess.sendline(Username)
             self._tmp_sess.sess.sendline(Password)
             self._tmp_sess.expect(self.default_expect)
             output = self._tmp_sess.sess.before
             output = output.decode()
-            m = re.search("Checking connectivity\.\.\. done.",
+            m = re.search('Checking connectivity\.\.\. done.',
                           output, flags=re.M)
             if m is None:
                 raise Exception('Clone fail')
@@ -319,14 +320,21 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
         else:
             raise Exception('Git clone fail')
 
+    def get_credential(self, repo):
+        for k, v in self.git_credential.items():
+            if k in repo:
+                return v
+        raise Exception('Git credential not found')
+
     def git_cmd(self, cmd, repo):
         self._tmp_sess.sess.sendline(cmd)
         index = self._tmp_sess.expect([self.default_expect, 'Username for'])
         if index == 0:
             return self._tmp_sess.sess.before
         elif index == 1:
-            Username = self.git_credential[repo]['Username']
-            Password = self.git_credential[repo]['Password']
+            credential = self.get_credential(repo)
+            Username = credential['Username']
+            Password = credential['Password']
             self._tmp_sess.sess.sendline(Username)
             self._tmp_sess.expect('Password for')
             self._tmp_sess.sess.sendline(Password)

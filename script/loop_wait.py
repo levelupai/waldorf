@@ -4,22 +4,22 @@ import time
 def get_local_ip():
     import socket
     lan_ip = (([ip for ip in socket.gethostbyname_ex(socket.gethostname())[2]
-                if not ip.startswith("127.")]
-               or [[(s.connect(("8.8.8.8", 53)), s.getsockname()[0], s.close())
+                if not ip.startswith('127.')]
+               or [[(s.connect(('8.8.8.8', 53)), s.getsockname()[0], s.close())
                     for s in [socket.socket(socket.AF_INET, socket.SOCK_DGRAM)]][0][1]])
-              + ["no IP found"])[0]
+              + ['no IP found'])[0]
     return lan_ip
 
 
 # Crude test for whether IP address is a valid IPv4 private address
 def is_private_ipv4_addr(ip_addr):
-    ip_parts = ip_addr.split(".")
+    ip_parts = ip_addr.split('.')
     if len(ip_parts) == 4:
-        if ip_parts[0] == "192" and ip_parts[1] == "168":
+        if ip_parts[0] == '192' and ip_parts[1] == '168':
             return True
-        elif ip_parts[0] == "10":
+        elif ip_parts[0] == '10':
             return True
-        elif ip_parts[0] == "172":
+        elif ip_parts[0] == '172':
             try:
                 ip_part1 = int(ip_parts[1])
                 if 16 <= ip_part1 <= 31:

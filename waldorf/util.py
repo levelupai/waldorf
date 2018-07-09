@@ -34,7 +34,7 @@ def get_path(name='log', abspath=None, relative_path=None, _file=None):
 # return current timestamp in human-readable format
 def get_timestamp():
     import datetime
-    return datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 
 
 import platform
@@ -101,18 +101,18 @@ def obj_decode(obj):
 def get_local_ip():
     import socket
     lan_ip = (([ip for ip in socket.gethostbyname_ex(socket.gethostname())[2]
-                if not ip.startswith("127.")]
-               or [[(s.connect(("8.8.8.8", 53)), s.getsockname()[0], s.close())
+                if not ip.startswith('127.')]
+               or [[(s.connect(('8.8.8.8', 53)), s.getsockname()[0], s.close())
                     for s in [socket.socket(socket.AF_INET,
                                             socket.SOCK_DGRAM)]][0][1]])
-              + ["no IP found"])[0]
+              + ['no IP found'])[0]
     return lan_ip
 
 
 BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
-RESET_SEQ = "\033[0m"
-COLOR_SEQ = "\033[1;%dm"
-BOLD_SEQ = "\033[1m"
+RESET_SEQ = '\033[0m'
+COLOR_SEQ = '\033[1;%dm'
+BOLD_SEQ = '\033[1m'
 COLORS = {
     'WARNING': YELLOW,
     'INFO': WHITE,
@@ -140,12 +140,12 @@ class ColoredFormatter(logging.Formatter):
                     30 + COLORS[levelname]) + levelname + RESET_SEQ
             record.levelname = levelname_color
         message = logging.Formatter.format(self, record)
-        message = message.replace("$RESET", RESET_SEQ) \
-            .replace("$BOLD", BOLD_SEQ)
+        message = message.replace('$RESET', RESET_SEQ) \
+            .replace('$BOLD', BOLD_SEQ)
         for k, v in COLORS.items():
-            message = message.replace("$" + k, COLOR_SEQ % (v + 30)) \
-                .replace("$BG" + k, COLOR_SEQ % (v + 40)) \
-                .replace("$BG-" + k, COLOR_SEQ % (v + 40))
+            message = message.replace('$' + k, COLOR_SEQ % (v + 30)) \
+                .replace('$BG' + k, COLOR_SEQ % (v + 40)) \
+                .replace('$BG-' + k, COLOR_SEQ % (v + 40))
         return message + RESET_SEQ
 
 

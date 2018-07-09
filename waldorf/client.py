@@ -510,7 +510,7 @@ class WaldorfClient(object):
         """
         if self.slave_num is None:
             self.check_slave()
-        assert self.slave_num > 0, "No slave available"
+        assert self.slave_num > 0, 'No slave available'
         self._put(_WaldorfAPI.ECHO)
         return self._get()
 
@@ -554,7 +554,7 @@ class WaldorfClient(object):
         """
         if self.slave_num is None:
             self.check_slave()
-        assert self.slave_num > 0, "No slave available"
+        assert self.slave_num > 0, 'No slave available'
         self._put(_WaldorfAPI.GET_ENV, (name, pairs, suites, self.cfg))
         return self._get()
 
@@ -569,7 +569,7 @@ class WaldorfClient(object):
         """
         if self.slave_num is None:
             self.check_slave()
-        assert self.slave_num > 0, "No slave available"
+        assert self.slave_num > 0, 'No slave available'
         if opts is None:
             opts = {}
         # Right now it won't check if the task can be callable.
@@ -588,7 +588,7 @@ class WaldorfClient(object):
         """
         if self.slave_num is None:
             self.check_slave()
-        assert self.slave_num > 0, "No slave available"
+        assert self.slave_num > 0, 'No slave available'
         self._put(_WaldorfAPI.FREEZE)
         r = self._get()
         self.is_freeze = True
@@ -609,7 +609,7 @@ class WaldorfClient(object):
             If callback presents, it will return None.
 
         """
-        assert self.is_freeze, "Run freeze first"
+        assert self.is_freeze, 'Run freeze first'
         task_uid = str(uuid.uuid4())
         if callback:
             if self.pool_sema:
@@ -651,7 +651,7 @@ class WaldorfClient(object):
         Returns:
             list of result
         """
-        assert self.is_freeze, "Run freeze first"
+        assert self.is_freeze, 'Run freeze first'
         self._put(_WaldorfAPI.MAP, (task.__name__, args))
         return self._get()
 

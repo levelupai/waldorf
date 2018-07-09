@@ -6,9 +6,9 @@ from waldorf.client import WaldorfClient
 MASTER_IP = '127.0.0.1'
 
 git_credential = {
-    "https://github.com/Seraphli/TestField.git": {
-        "Username": "username",
-        "Password": "password"
+    'https://github.com/': {
+        'Username': 'username',
+        'Password': 'password'
     }
 }
 
