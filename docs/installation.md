@@ -126,6 +126,29 @@ tmux a -t wds
 # to switch to a different tmux session, Ctrl+b then (
 ```
 
+### Increase the open file descriptor limit (optional)
+
+If you plan to run a large number of concurrent tasks, it may be necessary to
+increase the maximum number of open file descriptors allowed by your system.
+
+To check the current limit, run ```ulimit -Sn``` as the waldorf user, or as a
+user with **sudo** privileges, run ```sudo su - waldorf -c "ulimit -Sn"```.
+
+On Ubuntu 16.04 systems, the default soft limit should be 1024.
+
+To increase it, add new hard and soft limits to ```/etc/security/limits.conf```.
+These changes will be remembered even if the system is rebooted.
+
+```bash
+sudo bash -c \
+"printf \"\n\nwaldorf hard nofile 63536\n"\
+"waldorf soft nofile 63536\n\""\
+">> /etc/security/limits.conf"
+```
+
+The output of ```ulimit -Sn``` should now be 63536. You may need to log out and
+back in again to see the changes. 
+
 ## Monitor your cluster
 
 The Waldorf master listens on port 61801 and accepts HTTP and WebSocket
