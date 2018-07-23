@@ -176,11 +176,12 @@ class SetupSuite(object):
 
 
 class PExpect(object):
-    def __init__(self,
+    def __init__(self, logger,
                  spawn='bash',
                  default_expect=r'(?!\S+@\S+)(?:[:][^:]+?[$])',
                  default_timeout=60
                  ):
+        self.logger = logger
         self.spawn = spawn
         self.default_expect = default_expect
         self.timeout = default_timeout
@@ -199,14 +200,15 @@ class PExpect(object):
         try:
             return self.sess.expect(expect, timeout=self.timeout)
         except pexpect.TIMEOUT:
-            print('Timeout. Check out your expect string'
-                  ' or change default timeout.')
+            self.logger.error('Timeout. Check out your expect string'
+                             ' or change default timeout.')
             return -1
         except Exception as e:
-            print(e)
+            self.logger.error(e)
             return -1
 
     def run(self, cmd, expect=None):
+        self.logger.info('CMD: {}'.format(cmd))
         self.sess.sendline(cmd)
         if expect:
             self.expect(expect)
@@ -220,9 +222,10 @@ class PExpect(object):
 
 
 class WaldorfEnv(_MajorCmd, _MinorCmd):
-    def __init__(self, name, cfg: WaldorfCfg):
+    def __init__(self, name, cfg: WaldorfCfg, logger):
         self.name = name
         self.cfg = cfg
+        self.logger = logger
         self.git_credential = self.cfg.env_cfg.git_credential
         self.default_expect = self.cfg.env_cfg.default_expect
         self.default_timeout = self.cfg.env_cfg.default_timeout
@@ -235,14 +238,15 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
                           if os.path.isdir(os.path.join(self._env_dir, subdir))]
 
     def create_sess(self):
-        self._tmp_sess = PExpect(default_expect=self.default_expect,
+        self._tmp_sess = PExpect(self.logger,
+                                 default_expect=self.default_expect,
                                  default_timeout=self.default_timeout)
 
     def close_sess(self):
         self._tmp_sess.close()
 
     def create_env(self, path=None):
-        print('Create new environment')
+        self.logger.info('Create new environment')
         self.create_sess()
         cmd = 'cd ' + self._env_dir
         self.run_cmd(cmd)
@@ -267,7 +271,7 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
         self.update_env_list()
         self.close_sess()
         assert self.name not in self._env_list
-        print('Environment {} is removed'.format(self.name))
+        self.logger.info('Environment {} is removed'.format(self.name))
 
     def source_env(self):
         cmd = 'source ' + os.path.join(self._env_dir, self.name,
@@ -401,7 +405,7 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
                             'CommandList.CHECK_PY_VER')
         if self.name in self._env_list:
             if self.check_pattern([pairs[1]]):
-                print('Success')
+                self.logger.info('Success')
             else:
                 if self.cfg.env_cfg.already_exist == 'remove':
                     self.remove_env()
@@ -409,10 +413,10 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
                     'Environment already exists, but the version of python'
                     ' is not matched with the condition.')
         else:
-            print('Environment can not be found.')
+            self.logger.info('Environment can not be found.')
             self._run_pair(pairs[0])
             if self.check_pattern([pairs[1]]):
-                print('Success')
+                self.logger.info('Success')
             else:
                 if self.cfg.env_cfg.version_mismatch == 'remove':
                     self.remove_env()

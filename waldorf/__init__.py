@@ -1,4 +1,4 @@
-__version__ = '0.4.49'
+__version__ = '0.4.50'
 
 
 class _WaldorfAPI(object):

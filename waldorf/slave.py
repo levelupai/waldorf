@@ -10,7 +10,6 @@ from waldorf.env import WaldorfEnv
 import sys
 from waldorf.util import DummyLogger, init_logger, get_path, \
     ColoredFormatter, get_system_info, obj_encode, get_local_ip
-import logging
 import pickle
 import base64
 import threading
@@ -48,11 +47,11 @@ class CeleryWorker(mp.Process):
         self.multiplier = multiplier
         self.cfg = cfg
 
-    def setup_logger(self):
+    def setup_logger(self, level):
         import logging.handlers
         import sys
         logger = logging.getLogger(self.app_name)
-        logger.setLevel(logging.DEBUG)
+        logger.setLevel(level)
         logger.propagate = 0
         _cf = ['$GREEN[%(asctime)s]$RESET',
                '[%(name)s]',
@@ -61,7 +60,7 @@ class CeleryWorker(mp.Process):
                ' $CYAN%(message)s$RESET']
         cformatter = ColoredFormatter('-'.join(_cf))
         ch = logging.StreamHandler(sys.stdout)
-        ch.setLevel(logging.DEBUG)
+        ch.setLevel(level)
         ch.setFormatter(cformatter)
         logger.addHandler(ch)
         return logger
@@ -82,9 +81,11 @@ class CeleryWorker(mp.Process):
         activate_this = self.env_path + '/bin/activate_this.py'
         exec(open(activate_this).read(), dict(__file__=activate_this))
         if self.cfg.debug >= 1:
-            self.logger = self.setup_logger()
+            import logging
+            self.logger = self.setup_logger(logging.DEBUG)
         else:
-            self.logger = DummyLogger()
+            import logging
+            self.logger = self.setup_logger(logging.INFO)
         self.cfg.update()
         # Set up Celery worker.
         self.app = Celery(self.app_name,
@@ -167,11 +168,29 @@ class _WaldorfSio(mp.Process):
 
     def setup_logger(self):
         if self.cfg.debug >= 1:
+            import logging
             self.logger = init_logger(
                 'wd_slave', get_path(relative_path='.'),
                 (logging.DEBUG, logging.DEBUG))
         else:
-            self.logger = DummyLogger()
+            import logging.handlers
+            import sys
+            logger = logging.getLogger('wd_slave')
+            logger.setLevel(logging.INFO)
+            logger.propagate = 0
+            _cf = ['$GREEN[%(asctime)s]$RESET',
+                   '[%(name)s]',
+                   '$BLUE[%(filename)20s:%(funcName)15s:%(lineno)5d]$RESET',
+                   '[%(levelname)s]',
+                   ' $CYAN%(message)s$RESET']
+            cformatter = ColoredFormatter('-'.join(_cf))
+
+            ch = logging.StreamHandler(sys.stdout)
+            ch.setLevel(logging.INFO)
+            ch.setFormatter(cformatter)
+
+            logger.addHandler(ch)
+            self.logger = logger
 
     def put(self, r):
         self.cmd_queue[1].put(r)
@@ -256,13 +275,14 @@ class Namespace(SocketIONamespace):
             if w_prefetch_multi != self.w_prefetch_multi and not self.busy and \
                     len(self.workers.keys()) == 0:
                 if len(self.workers.keys()) == 0:
-                    print('w_prefetch_multi argument: {} -> {}'.
-                          format(self.w_prefetch_multi,
-                                 w_prefetch_multi))
+                    self.up.logger.info('w_prefetch_multi argument: {} -> {}'.
+                                        format(self.w_prefetch_multi,
+                                               w_prefetch_multi))
                     self.w_prefetch_multi = w_prefetch_multi
                 else:
-                    print('w_prefetch_multi argument is discarded: {}'.
-                          format(w_prefetch_multi))
+                    self.up.logger.info(
+                        'w_prefetch_multi argument is discarded: {}'.format(
+                            w_prefetch_multi))
         threading.Thread(target=self.update).start()
 
     def log(self, msg):
@@ -292,7 +312,7 @@ class Namespace(SocketIONamespace):
         info = self.get_info_dict(uid)
         name, pairs, suites, cfg = pickle.loads(base64.b64decode(args))
         info['get_env'] = [name, pairs, suites, cfg]
-        self.env = WaldorfEnv(name, cfg)
+        self.env = WaldorfEnv(name, cfg, self.up.logger)
         resp = self.env.get_env(pairs, suites)
         hostname = socket.gethostname()
         self.emit(_WaldorfAPI.GET_ENV + '_resp', (uid, hostname, resp))
@@ -400,6 +420,7 @@ class WaldorfSlave(object):
 
     def setup_logger(self):
         if self.debug >= 2:
+            import logging
             _cf = ['$GREEN[%(asctime)s]$RESET',
                    '[%(name)s]',
                    '$BLUE[%(filename)20s:%(funcName)15s:%(lineno)5d]$RESET',
@@ -418,14 +439,14 @@ class WaldorfSlave(object):
             while True:
                 cmd = input('cmd:\n')
                 if cmd == 'exit':
-                    print('exiting')
+                    print('L442: Exiting')
                     self._sio_queue[0].put((cmd,))
                     self._sio_queue[1].get()
                     break
         except KeyboardInterrupt:
             self._sio_queue[0].put(('exit',))
             self._sio_queue[1].get()
-        print('end')
+        print('L449: End')
 
 
 def parse_args():

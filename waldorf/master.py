@@ -629,11 +629,11 @@ class WaldorfMaster(object):
             cmd = input('cmd:\n')
             if cmd == 'exit':
                 self.app.terminate()
-                print('exiting')
+                print('L632: Exiting')
                 break
             else:
                 self.web_queue.put(cmd)
-        print('end')
+        print('L636: End')
 
 
 def parse_args():
