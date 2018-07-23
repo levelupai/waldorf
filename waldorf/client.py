@@ -63,6 +63,7 @@ class ResultThread(threading.Thread):
                 if self.up.info['tasks'][task_uid]['retry_times'] \
                         > self.up.cfg.retry_times:
                     self.up.logger.error('Maximum retry times reached.')
+                    print('Maximum retry times reached. System exit.')
                     self.cmd_q.put((_WaldorfAPI.CLEAN_UP, None))
                     break
                 task_name, args = self.up.info['tasks'][task_uid]['info']

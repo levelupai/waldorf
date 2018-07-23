@@ -194,6 +194,12 @@ class _WaldorfSio(mp.Process):
             if cmd[0] == 'exit':
                 # TODO: Move this part to slave namespace?
                 self.slave_ns.emit(_WaldorfAPI.EXIT, self.uid)
+                for uid in self.slave_ns.workers:
+                    print('Stop worker, uid: {}'.format(
+                        uid, self.slave_ns.workers[uid][3]))
+                    for task in self.slave_ns.workers[uid][3]:
+                        print('task name: {}'.format(task[0]))
+                    self.slave_ns.info[uid]['worker'].terminate()
                 break
         self.sock.disconnect()
         self.cmd_queue[1].put(0)
