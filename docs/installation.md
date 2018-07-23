@@ -24,14 +24,14 @@ account that has **sudo** privileges:
 
 ```bash
 # install C build tools
-sudo apt-get -y install make gcc
+sudo apt-get install make gcc
 
 # install C development headers for a full Python install
-sudo apt-get -y install libbz2-dev libgdbm-dev liblzma-dev libncurses5-dev \
+sudo apt-get install libbz2-dev libgdbm-dev liblzma-dev libncurses5-dev \
 libreadline-dev libsqlite3-dev libssl-dev tk-dev zlib1g-dev
 
 # install other packages needed by Waldorf
-sudo apt-get -y install libmemcached-dev git tmux
+sudo apt-get install libmemcached-dev git tmux
 ```
 
 Waldorf, like Celery, needs a message broker to send messages to worker
@@ -45,7 +45,7 @@ and Memcached (backend).
 To install Redis:
 
 ```bash
-sudo apt-get -y install redis-server
+sudo apt-get install redis-server
 ```
 
 The Redis configuration file can be found at `/etc/redis/redis.conf` on
@@ -58,7 +58,7 @@ backend are **strongly** encouraged to get reasonable performance.
 If you prefer to use RabbitMQ as a message broker:
 
 ```bash
-sudo apt-get -y install rabbitmq-server
+sudo apt-get install rabbitmq-server
 # Create a user (waldorf) with password 'waldorf'
 sudo rabbitmqctl add_user waldorf waldorf
 sudo rabbitmqctl set_permissions -p / waldorf ".*" ".*" ".*"
@@ -66,7 +66,7 @@ sudo rabbitmqctl set_permissions -p / waldorf ".*" ".*" ".*"
 
 And if you want to use Memcached as a backend data store:
 ```bash
-sudo apt-get -y install memcached
+sudo apt-get install memcached
 ```
 
 When the Waldorf master and slave processes are started, the broker and
