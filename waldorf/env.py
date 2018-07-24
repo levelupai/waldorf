@@ -185,7 +185,7 @@ class PExpect(object):
         self.spawn = spawn
         self.default_expect = default_expect
         self.timeout = default_timeout
-        self.sess = pexpect.spawn(spawn)
+        self.sess = pexpect.spawn(spawn, use_poll=True)
         self.sess.delayafterclose = 1
         self.sess.delayafterterminate = 1
         self.sess.ptyproc.delayafterclose = 1
@@ -226,6 +226,7 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
         self.name = name
         self.cfg = cfg
         self.logger = logger
+        self._tmp_sess = None
         self.git_credential = self.cfg.env_cfg.git_credential
         self.default_expect = self.cfg.env_cfg.default_expect
         self.default_timeout = self.cfg.env_cfg.default_timeout
@@ -238,12 +239,15 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
                           if os.path.isdir(os.path.join(self._env_dir, subdir))]
 
     def create_sess(self):
+        if self._tmp_sess is not None:
+            self._tmp_sess.close()
         self._tmp_sess = PExpect(self.logger,
                                  default_expect=self.default_expect,
                                  default_timeout=self.default_timeout)
 
     def close_sess(self):
         self._tmp_sess.close()
+        self._tmp_sess = None
 
     def create_env(self, path=None):
         self.logger.info('Create new environment')
