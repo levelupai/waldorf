@@ -13,7 +13,7 @@ WALDORF_ENV_NAME=waldorf
 # pip mirror (mainland China)
 PIP_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple
 # Python interpreter mirror (mainland China)
-PYTHON_MIRROR=http://mirrors.sohu.com/python/
+PYTHON_MIRROR=http://npm.taobao.org/mirrors/python/
 # Download URL and details for Python Virtualenv (mainland China mirror)
 VIRTUALENV_VERSION=15.2.0
 VIRTUALENV_EXTENSION=tar.gz
