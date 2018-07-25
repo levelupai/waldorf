@@ -256,6 +256,7 @@ class Namespace(SocketIONamespace):
         self.info = {}
         self._code = None
         self.affinity = [i for i in range(mp.cpu_count())][-self.up.cfg.core:]
+        self.envs = {}
         self.workers = {}
         self.check_q = [queue.Queue(), queue.Queue()]
         self.check_thread = CheckCPUThread(self.check_q)
@@ -312,8 +313,8 @@ class Namespace(SocketIONamespace):
         info = self.get_info_dict(uid)
         name, pairs, suites, cfg = pickle.loads(base64.b64decode(args))
         info['get_env'] = [name, pairs, suites, cfg]
-        self.env = WaldorfEnv(name, cfg, self.up.logger)
-        resp = self.env.get_env(pairs, suites)
+        self.envs[uid] = WaldorfEnv(name, cfg, self.up.logger)
+        resp = self.envs[uid].get_env(pairs, suites)
         hostname = socket.gethostname()
         self.emit(_WaldorfAPI.GET_ENV + '_resp', (uid, hostname, resp))
         self.busy = False
@@ -346,7 +347,8 @@ class Namespace(SocketIONamespace):
         """Freeze worker configuration and set up worker."""
         self.busy = True
         self.log('on_freeze')
-        args = [uid, self.env.get_py_path(), self.env.get_env_path(),
+        args = [uid, self.envs[uid].get_py_path(),
+                self.envs[uid].get_env_path(),
                 self.get_info_dict(uid)['tasks']]
         self.workers[uid] = args
         args = copy.deepcopy(args)
