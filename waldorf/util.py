@@ -43,8 +43,10 @@ import subprocess
 import psutil
 import re
 from collections import namedtuple
+import datetime
 
 SystemInfo = namedtuple('SystemInfo', ['os', 'cpu_type', 'cpu_count', 'mem'])
+get_run_timestamp = lambda: datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
 def get_system_info():
@@ -137,7 +139,7 @@ class ColoredFormatter(logging.Formatter):
         levelname = record.levelname
         if levelname in COLORS:
             levelname_color = COLOR_SEQ % (
-                    30 + COLORS[levelname]) + levelname + RESET_SEQ
+                30 + COLORS[levelname]) + levelname + RESET_SEQ
             record.levelname = levelname_color
         message = logging.Formatter.format(self, record)
         message = message.replace('$RESET', RESET_SEQ) \

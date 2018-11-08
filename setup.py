@@ -20,16 +20,14 @@ setup(
         "virtualenv==15.2.0",
         "psutil==5.4.5",
         "aiohttp==3.1.3",
-        "celery==4.2.0rc3",
+        "celery==4.2.1",
         "python-socketio==1.9.0",
         "tqdm==4.23.3",
         "socketIO-client==0.7.2",
-        "hiredis==0.2.0",
         "redis==2.10.6",
-        "pycrypto==2.6.1",
+        "pycryptodome==3.6.6",
         "pexpect==4.5.0",
-        "pylibmc==1.5.2",
         "Markdown==2.6.11",
-        "kombu==4.1.0"
+        "kombu==4.2.1"
     ]
 )

@@ -1,4 +1,4 @@
-__version__ = '0.4.52'
+__version__ = '0.4.60'
 
 
 class _WaldorfAPI(object):
@@ -18,3 +18,5 @@ class _WaldorfAPI(object):
     CHANGE_CORE = 'change_core'
     UP_TIME = 'up_time'
     EXIT = 'exit'
+    UPDATE_TABLE = 'update_table'
+    RESTART_TASK = 'restart_task'

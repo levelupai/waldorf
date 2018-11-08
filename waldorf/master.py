@@ -1,7 +1,6 @@
 from aiohttp import web
 import socketio
 import multiprocessing as mp
-import http.cookies
 import time
 import waldorf
 from waldorf import _WaldorfAPI
@@ -69,9 +68,20 @@ class _WaldorfWebApp(mp.Process):
         self.md_table = md_util.Table()
         self.md_table.set_head(
             ['Hostname', 'Type', 'State', 'ConnectTime', 'DisconnectTime',
-             'UID', 'Version', 'IP', 'CPU', 'CORES', 'USED_CORES',
-             'Memory', 'OS'])
+             'UID', 'Version', 'IP', 'CPU', 'Ready', 'CORES', 'USED', 'LOAD(%)',
+             'LOAD(1)', 'LOAD(5)', 'LOAD(15)', 'P', 'Memory', 'OS'])
         self.mg.add_element(self.md_table)
+
+        # info for restart slave task
+        self.registered_info = {}
+
+    def register_task(self, uid, env=None, task=None, sid=None):
+        if env:
+            self.registered_info[uid][0] = env
+        if task:
+            self.registered_info[uid][1].append(task)
+        if sid:
+            self.registered_info[uid][2] = sid
 
     def setup_rsa(self):
         """Setup public key and private key for git credential."""
@@ -184,7 +194,8 @@ class AdminNamespace(socketio.AsyncNamespace):
             self.info['change_core'][uid] = core
             self.events['change_core'] = asyncio.Event()
             await self.up.slave_ns.emit(_WaldorfAPI.CHANGE_CORE,
-                                        core, room=_slave_sid)
+                                        (core, self.up.registered_info),
+                                        room=_slave_sid)
             await self.events['change_core'].wait()
             resp = self.info['change_core_resp'][uid]
             if resp[0] == 0:
@@ -251,6 +262,9 @@ class ClientNamespace(socketio.AsyncNamespace):
             'Connection lost over {} sec. Client uid: {} is removed'.format(
                 self.lost_timeout, uid))
         self.info['uid'].pop(uid)
+        self.up.logger.debug('on clean up, registered client uid: {}'.format(
+            list(self.up.registered_info.keys())))
+        self.up.registered_info.pop(uid)
         await self.up.slave_ns.emit(_WaldorfAPI.CLEAN_UP,
                                     uid, room='slave')
 
@@ -295,6 +309,8 @@ class ClientNamespace(socketio.AsyncNamespace):
         self.info['uid'][uid]['hostname'] = hostname
         self.info['sid'][sid]['uid'] = uid
         self.connections[uid] = hostname
+        if uid not in self.up.registered_info:
+            self.up.registered_info[uid] = [None, [], None]
         self.properties[uid] = {
             'Hostname': hostname,
             'Type': 'Client',
@@ -305,8 +321,14 @@ class ClientNamespace(socketio.AsyncNamespace):
             'Version': version,
             'IP': info['ip'],
             'CPU': info['cpu_type'],
+            'Ready': ' ',
             'CORES': info['cpu_count'],
             'USED_CORES': ' ',
+            'LOAD(%)': ' ',
+            'LOAD(1)': ' ',
+            'LOAD(5)': ' ',
+            'LOAD(15)': ' ',
+            'P': ' ',
             'Memory': info['mem'],
             'OS': info['os']
         }
@@ -337,6 +359,10 @@ class ClientNamespace(socketio.AsyncNamespace):
                 self.up.logger.debug('client {} disconnect, uid: {}.'.format(
                     self.info['uid'][uid]['hostname'], uid))
                 self.info['uid'].pop(uid)
+                self.up.logger.debug(
+                    'on_disconnect, registered client uid: {}'.format(
+                        list(self.up.registered_info.keys())))
+                self.up.registered_info.pop(uid)
             else:
                 self.info['uid'][uid]['disconnect_time'] = time.time()
                 self.up.logger.debug('client {} disconnect abnormally, uid: {}.'
@@ -393,6 +419,7 @@ class ClientNamespace(socketio.AsyncNamespace):
                 return
         args = (name, pairs, suites, cfg)
         args = obj_encode(args)
+        self.up.register_task(uid, env=args)
         await self.up.slave_ns.emit(
             _WaldorfAPI.GET_ENV, (uid, args), room='slave')
         self.info['uid'][uid]['get_env_count'] = \
@@ -409,6 +436,7 @@ class ClientNamespace(socketio.AsyncNamespace):
         if 'task' not in self.info['uid'][uid]:
             self.info['uid'][uid]['task'] = []
         self.info['uid'][uid]['task'].append([task_name, task_code, opts])
+        self.up.register_task(uid, task=(task_name, task_code, opts))
         await self.up.slave_ns.emit(_WaldorfAPI.REG_TASK,
                                     (uid, task_name, task_code, opts),
                                     room='slave')
@@ -417,6 +445,7 @@ class ClientNamespace(socketio.AsyncNamespace):
         """Freeze slave tasks configuration."""
         self.up.logger.debug('on_freeze')
         uid = args
+        self.up.register_task(uid, sid=sid)
         await self.up.slave_ns.emit(_WaldorfAPI.FREEZE,
                                     (uid, sid), room='slave')
 
@@ -466,7 +495,35 @@ class SlaveNamespace(socketio.AsyncNamespace):
                     'Connection lost over {} sec. Slave uid: {} is removed'.
                         format(self.lost_timeout, k))
                 self.info['uid'].pop(k)
+        args = ['load_avg1', 'load_avg5', 'load_avg15', 'prefetch_multi',
+                'ready']
+        await self.emit(_WaldorfAPI.UPDATE_TABLE, args, room='slave')
         asyncio.ensure_future(self.update())
+
+    async def on_update_table_resp(self, sid, args):
+        """API for updating table
+
+        Update value of certain column
+        args: k: column name, v: new column value
+        """
+        if sid in self.info['sid'] and 'uid' in self.info['sid'][sid]:
+            uid = self.info['sid'][sid]['uid']
+            for k, v in args.items():
+                if k == 'load_avg1':
+                    self.properties[uid]['LOAD(1)'] = v
+                    self.properties[uid]['LOAD(%)'] = '{}%'.format(round(
+                        100 * float(v) / float(
+                            self.properties[uid]['USED_CORES']), 1)) if \
+                    self.properties[uid]['USED_CORES'] > 0 else '0.0%'
+                if k == 'load_avg5':
+                    self.properties[uid]['LOAD(5)'] = v
+                if k == 'load_avg15':
+                    self.properties[uid]['LOAD(15)'] = v
+                if k == 'prefetch_multi':
+                    self.properties[uid]['P'] = v
+                if k == 'ready':
+                    self.properties[uid]['Ready'] = v
+            self.up.md_table.update_object(uid + '_s', self.properties[uid])
 
     async def on_connect(self, sid, environ):
         """Slave connect.
@@ -514,13 +571,26 @@ class SlaveNamespace(socketio.AsyncNamespace):
             'Version': version,
             'IP': info['ip'],
             'CPU': info['cpu_type'],
+            'Ready': 'True',
             'CORES': info['cpu_count'],
             'USED_CORES': info['cfg_core'],
+            'LOAD(%)': ' ',
+            'LOAD(1)': ' ',
+            'LOAD(5)': ' ',
+            'LOAD(15)': ' ',
+            'P': info['prefetch_multi'],
             'Memory': info['mem'],
             'OS': info['os']
         }
-        # Use _s to denote slave
+        # Update table
         self.up.md_table.update_object(uid + '_s', self.properties[uid])
+
+        # Send existing tasks to slave
+        self.up.logger.debug(
+            'resending {} task(s) to slave, hostname: {}, uid: {}'.format(
+                len(self.up.registered_info), hostname, uid))
+        await self.emit(_WaldorfAPI.RESTART_TASK, self.up.registered_info,
+                        room=sid)
 
     async def on_check_ver(self, sid, version):
         """Receive slave's check version request."""
@@ -570,22 +640,23 @@ class SlaveNamespace(socketio.AsyncNamespace):
 
         It will send a response to client when all slaves reply their responses.
         """
-        uid, hostname, resp = args
+        uid, hostname, resp, restart = args
         self.up.logger.debug('on_get_env_resp')
         self.up.logger.debug('get response from {}'.format(
             self.info['uid'][self.info['sid'][sid]['uid']]['hostname']))
         if uid not in self.up.client_ns.info['uid']:
             return
-        self.up.client_ns.info['uid'][uid]['get_env_count'].remove(hostname)
-        self.up.client_ns.info['uid'][uid]['get_env_resp'].append((hostname,
-                                                                   resp))
-        self.up.logger.debug('remaining {}'.format(
-            self.up.client_ns.info['uid'][uid]['get_env_count']))
-        if len(self.up.client_ns.info['uid'][uid]['get_env_count']) <= 0:
-            await self.up.client_ns.emit(
-                _WaldorfAPI.GET_ENV + '_resp',
-                self.up.client_ns.info['uid'][uid]['get_env_resp'],
-                room=self.up.client_ns.info['uid'][uid]['sid'])
+        if not restart:
+            self.up.client_ns.info['uid'][uid]['get_env_count'].remove(hostname)
+            self.up.client_ns.info['uid'][uid]['get_env_resp'].append((hostname,
+                                                                       resp))
+            self.up.logger.debug('remaining {}'.format(
+                self.up.client_ns.info['uid'][uid]['get_env_count']))
+            if len(self.up.client_ns.info['uid'][uid]['get_env_count']) <= 0:
+                await self.up.client_ns.emit(
+                    _WaldorfAPI.GET_ENV + '_resp',
+                    self.up.client_ns.info['uid'][uid]['get_env_resp'],
+                    room=self.up.client_ns.info['uid'][uid]['sid'])
 
     async def on_echo_resp(self, sid, client_sid):
         """Echo response from slaves."""
@@ -596,14 +667,16 @@ class SlaveNamespace(socketio.AsyncNamespace):
         await self.up.client_ns.emit(
             _WaldorfAPI.ECHO + '_resp', 'slave_' + sid, room=client_sid)
 
-    async def on_freeze_resp(self, sid, client_sid):
+    async def on_freeze_resp(self, sid, args):
         """Freeze response from slaves."""
         # TODO: move client side wait to master? like get_env
+        client_sid, restart = args
         self.up.logger.debug('on_freeze_resp')
         self.up.logger.debug('get response from {}'.format(
             self.info['uid'][self.info['sid'][sid]['uid']]['hostname']))
-        await self.up.client_ns.emit(
-            _WaldorfAPI.FREEZE + '_resp', 'slave_' + sid, room=client_sid)
+        if not restart:
+            await self.up.client_ns.emit(
+                _WaldorfAPI.FREEZE + '_resp', 'slave_' + sid, room=client_sid)
 
     def on_change_core_resp(self, sid, resp):
         uid = self.info['sid'][sid]['uid']
@@ -629,11 +702,11 @@ class WaldorfMaster(object):
             cmd = input('cmd:\n')
             if cmd == 'exit':
                 self.app.terminate()
-                print('L632: Exiting')
+                print('L705: Exiting')
                 break
             else:
                 self.web_queue.put(cmd)
-        print('L636: End')
+        print('L709: End')
 
 
 def parse_args():

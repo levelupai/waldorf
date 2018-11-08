@@ -47,8 +47,6 @@ class GymDemo(object):
     def setup_waldorf(self):
         cfg = WaldorfCfg(master_ip=MASTER_IP)
         cfg.debug = 1
-        # Create a Waldorf client and connect it to the Master server
-        self.client = WaldorfClient(cfg, limit=50)
 
         cfg.env_cfg.already_exist = 'remove'
         cfg.env_cfg.version_mismatch = 'remove'
@@ -56,6 +54,9 @@ class GymDemo(object):
         # you have to generate the credential file first.
         # This avoid putting any sensitive information directly in your code.
         # cfg.env_cfg.git_credential = open('credential', 'rb').read()
+
+        # Create a Waldorf client and connect it to the Master server
+        self.client = WaldorfClient(cfg, limit=50)
 
         # Command pair is used to define all sorts of command.
         # These commands are used to create environment

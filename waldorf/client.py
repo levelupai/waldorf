@@ -2,7 +2,6 @@ from socketIO_client import SocketIO, SocketIONamespace
 import uuid
 import multiprocessing as mp
 import queue
-import celery.exceptions
 from celery import Celery
 import tqdm
 import sys
@@ -24,6 +23,8 @@ from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
 import Crypto.Util.number
 import traceback
+import redis
+import copy
 
 
 class ResultThread(threading.Thread):
@@ -36,49 +37,99 @@ class ResultThread(threading.Thread):
         self.cmd_q = self.up.cmd_queue[0]
         self.cfg = self.up.cfg
         self.daemon = True
+        self.client = redis.StrictRedis(host=self.up.cfg.broker_ip,
+                                        port=self.up.cfg.redis_port)
 
     def run(self):
+        task_list = []
+        remove_list = []
+        flag = False
         while True:
-            task_uid, r = self.q[0].get()
-            if r == _WaldorfAPI.CLEAN_UP:
-                break
-            try:
-                # Calculate timeout value
-                now = time.time()
-                submit_time = self.up.info['tasks'][task_uid]['submit_time']
-                timeout = self.cfg.result_timeout - (now - submit_time)
-                timeout = max(0.05, timeout)
-                res = r.get(timeout=timeout,
-                            interval=self.cfg.get_interval)
-                self.q[1].put((task_uid, res))
-                self.up.info['tasks'].pop(task_uid)
-            except billiard.exceptions.WorkerLostError as e:
-                # Catch worker lost exception
-                # when celery perform warm process shutdown
-                self.up.logger.warning('{}. May cause by celery warm process'
-                                       ' shutdown.'.format(e))
-                break
-            except celery.exceptions.TimeoutError:
-                self.up.info['tasks'][task_uid]['retry_times'] += 1
-                if self.up.info['tasks'][task_uid]['retry_times'] \
-                        > self.up.cfg.retry_times:
-                    self.up.logger.error('Maximum retry times reached.')
-                    print('L66: Maximum retry times reached. Exit.')
-                    self.cmd_q.put((_WaldorfAPI.CLEAN_UP, None))
+            for i in range(self.q[0].qsize()):
+                task_uid, r = self.q[0].get()
+                if r == _WaldorfAPI.CLEAN_UP:
+                    flag = True
                     break
-                task_name, args = self.up.info['tasks'][task_uid]['info']
-                self.up.logger.warning('Receive timeout error. Resend task. '
-                                       'task_name: {}, uid: {}, args: {}'.
-                                       format(task_name, task_uid, args))
-                r = self.up.info['task_handlers'][task_name].apply_async(
-                    args=(args,))
-                self.up.result_q[0].put((task_uid, r))
-            except Exception as e:
-                # catch any exceptions and print it
-                print('L78: ' + traceback.format_exc())
-                # after that clean up slave
-                self.cmd_q.put((_WaldorfAPI.CLEAN_UP, None))
+                task_list.append((task_uid, r))
+            if flag:
                 break
+            if len(task_list) == 0:
+                time.sleep(0.05)
+                continue
+            for task_uid, r in task_list:
+                task_meta_id = 'celery-task-meta-' + r.id
+                exist = self.client.exists(task_meta_id)
+                if exist:
+                    try:
+                        res = self.client.get(task_meta_id)
+                        res = pickle.loads(res)
+                        if res['traceback']:
+                            if isinstance(res['traceback'],
+                                          redis.ConnectionError):
+                                if not self.handle_retry(
+                                        task_uid, r, remove_list,
+                                        etype=type(res['traceback'])):
+                                    flag = True
+                                    break
+                            else:
+                                raise Exception(res['traceback'])
+                        else:
+                            res = res['result']
+                            if isinstance(
+                                    res, (redis.ConnectionError,
+                                          billiard.exceptions.WorkerLostError)):
+                                if not self.handle_retry(
+                                        task_uid, r, remove_list,
+                                        etype=type(res)):
+                                    flag = True
+                                    break
+                            else:
+                                self.q[1].put((task_uid, res))
+                                self.up.info['tasks'].pop(task_uid)
+                                # Add result to remove list
+                                remove_list.append((task_uid, r))
+                    except Exception as e:
+                        # catch any exceptions and print it
+                        print('L93: ' + traceback.format_exc())
+                        # after that clean up slave
+                        self.cmd_q.put((_WaldorfAPI.CLEAN_UP, None))
+                        flag = True
+                        break
+                else:
+                    now = time.time()
+                    submit_time = self.up.info['tasks'][task_uid]['submit_time']
+                    timeout = self.cfg.result_timeout - (now - submit_time)
+                    # Register timeout tasks
+                    if timeout < 0:
+                        if not self.handle_retry(task_uid, r, remove_list,
+                                                 etype='Timeout'):
+                            flag = True
+                            break
+                    time.sleep(0.05)
+
+            for task_uid, r in remove_list:
+                task_list.remove((task_uid, r))
+            remove_list.clear()
+
+    def handle_retry(self, task_uid, r, remove_list, etype=''):
+        self.up.info['tasks'][task_uid]['retry_times'] += 1
+        if self.up.info['tasks'][task_uid]['retry_times'] \
+                > self.up.cfg.retry_times:
+            self.up.logger.error('Maximum retry times reached.')
+            print('L119: Maximum retry times reached. Exit.')
+            self.cmd_q.put((_WaldorfAPI.CLEAN_UP, None))
+            return False
+        task_name, args = self.up.info['tasks'][task_uid]['info']
+        self.up.logger.warning(
+            'Receive {}. Resend task. task_name: {}, uid: {}'.
+                format(etype, task_name, task_uid))
+        remove_list.append((task_uid, r))
+        r = self.up.info['task_handlers'][task_name]. \
+            apply_async(args=(args,))
+        self.up.info['tasks'][task_uid][
+            'submit_time'] = time.time()
+        self.up.result_q[0].put((task_uid, r))
+        return True
 
 
 class SockWaitThread(threading.Thread):
@@ -121,6 +172,8 @@ class _WaldorfSio(mp.Process):
         self.debug = self.cfg.debug
         self.setup_logger()
         self.result_q = [queue.Queue(), self.submit_queue[0]]
+        self.client = redis.StrictRedis(host=self.cfg.broker_ip,
+                                        port=self.cfg.redis_port)
         self.rt = ResultThread(self)
         self.rt.start()
 
@@ -133,7 +186,12 @@ class _WaldorfSio(mp.Process):
                              'cpu_type': self.system_info.cpu_type,
                              'cpu_count': self.system_info.cpu_count,
                              'cfg_core': self.cfg.core,
-                             'mem': self.system_info.mem}
+                             'mem': self.system_info.mem,
+                             'load_avg1': ' ',
+                             'load_avg5': ' ',
+                             'load_avg15': ' ',
+                             'prefetch_multi': ' ',
+                             'ready': ' '}
 
         # Connect to Waldorf master.
         self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port)
@@ -260,6 +318,7 @@ class _WaldorfSio(mp.Process):
         self.info['task_handlers'] = {}
         for name, task in self.info['tasks'].items():
             self.info['task_handlers'][name] = app.task(**task[1])(task[0])
+            self.info['task_handlers'][name].ignore_result = True
         self.info['freeze_count'] = len(self.info['check_slave_resp'].keys())
         self.info['freeze_resp'] = []
         self.events['freeze'] = threading.Event()
@@ -279,6 +338,22 @@ class _WaldorfSio(mp.Process):
             args=(args,))
         self.result_q[0].put((task_uid, r))
 
+    def handle_retry(self, t_id, retry, submit, r,
+                     task_name, task, arg, etype=''):
+        retry[t_id] += 1
+        if retry[t_id] > self.cfg.retry_times:
+            self.logger.error('Maximum retry times reached.')
+            print('L346: Maximum retry times reached. Exit.')
+            self.cmd_queue[0].put((_WaldorfAPI.CLEAN_UP, None))
+            return False
+        self.logger.warning(
+            'Receive {}. Resend task. '
+            'task_name: {}, uid: {}'.
+                format(etype, task_name, t_id))
+        r[t_id] = task.apply_async(args=(arg,))
+        submit[t_id] = time.time()
+        return True
+
     def on_map(self, task_name: str, args):
         """Use for loop to send jobs and get results.
 
@@ -288,19 +363,78 @@ class _WaldorfSio(mp.Process):
         num = len(args)
         self.logger.debug('num of task: {}'.format(num))
         task = self.info['task_handlers'][task_name]
-        r = []
+        r = {}
+        submit = {}
+        retry = {}
+
         if self.debug:
             pbar = tqdm.tqdm(total=num * 2 + 1, file=sys.stdout)
         else:
             pbar = Dummytqdm()
-        for arg in args:
-            r.append(task.apply_async(args=(arg,)))
+        for t_id, arg in enumerate(args):
+            r[t_id] = task.apply_async(args=(arg,))
+            submit[t_id] = time.time()
+            retry[t_id] = 0
             pbar.update()
-        result = []
-        for _r in r:
-            result.append(_r.get(timeout=self.cfg.result_timeout,
-                                 interval=self.cfg.get_interval))
-            pbar.update()
+
+        result = [0 for _ in range(len(args))]
+        result_queue = [_ for _ in range(len(args))]
+        flag = False
+        while result_queue and not flag:
+            for t_id in copy.deepcopy(result_queue):
+                ar = r[t_id]
+                task_meta_id = 'celery-task-meta-' + ar.id
+                exist = self.client.exists(task_meta_id)
+                if exist:
+                    try:
+                        res = self.client.get(task_meta_id)
+                        res = pickle.loads(res)
+                        if res['traceback']:
+                            if isinstance(res['traceback'],
+                                          redis.ConnectionError):
+                                if not self.handle_retry(
+                                        t_id, retry, submit, r,
+                                        task_name, task, args[t_id],
+                                        etype=type(res['traceback'])):
+                                    flag = True
+                                    break
+                            else:
+                                raise Exception(res['traceback'])
+                        else:
+                            res = res['result']
+                            if isinstance(
+                                    res, (redis.ConnectionError,
+                                          billiard.exceptions.WorkerLostError)):
+                                if not self.handle_retry(
+                                        t_id, retry, submit, r,
+                                        task_name, task, args[t_id],
+                                        etype=type(res)):
+                                    flag = True
+                                    break
+                            else:
+                                result[t_id] = res
+                                result_queue.remove(t_id)
+                                pbar.update()
+                    except Exception as e:
+                        # catch any exceptions and print it
+                        print('L420: ' + traceback.format_exc())
+                        # after that clean up slave
+                        self.cmd_queue[0].put((_WaldorfAPI.CLEAN_UP, None))
+                        flag = True
+                        break
+                else:
+                    now = time.time()
+                    submit_time = submit[t_id]
+                    timeout = self.cfg.result_timeout - (now - submit_time)
+                    # Register timeout tasks
+                    if timeout < 0:
+                        if not self.handle_retry(
+                                t_id, retry, submit, r,
+                                task_name, task, args[t_id],
+                                etype='Timeout'):
+                            flag = True
+                            break
+                    time.sleep(0.05)
         self.put(result)
         pbar.update()
         pbar.close()

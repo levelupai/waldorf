@@ -190,7 +190,7 @@ function updateCoreSelector() {
     }
   );
   if (matchingMachine[0] === undefined) return;
-  for (var i = 1; i <= parseInt(matchingMachine[0]['CORES']); i++) {
+  for (var i = 0; i <= parseInt(matchingMachine[0]['CORES']); i++) {
     var defaultSelected = false;
     var currentSelected = false;
     if (i == 1) defaultSelected = true;
@@ -298,7 +298,7 @@ function createCpuEditingTable(dataSource) {
     thisSelect.id = 'export-' + hostname;
     exportTableSettings[hostname] = targetCores;
     thisSelect.innerHTML = '<option></option>';
-    for (var j = 1; j <= maxCores; j++) {
+    for (var j = 0; j <= maxCores; j++) {
       var defaultSelected = false;
       var currentSelected = false;
       if (j == targetCores) {
@@ -606,6 +606,18 @@ $(document).ready(function() {
       return parseInt(a) + parseInt(b['CORES']);
     }, 0);
 
+    var totalLoad1 = onlineSlavesFiltered.reduce(function(a, b) {
+      return parseFloat(a) + parseFloat(b['LOAD(1)']);
+    }, 0);
+
+    var totalLoad5 = onlineSlavesFiltered.reduce(function(a, b) {
+      return parseFloat(a) + parseFloat(b['LOAD(5)']);
+    }, 0);
+
+    var totalLoad15 = onlineSlavesFiltered.reduce(function(a, b) {
+      return parseFloat(a) + parseFloat(b['LOAD(15)']);
+    }, 0);
+
     var onlineClients = clients.filter(function(value, index, array) {
       return value['State'] == 'Online';
     });
@@ -619,12 +631,18 @@ $(document).ready(function() {
       cpuUsageRate = Math.floor(100.0 * usedCoreCount / totalCoreCount);
     }
     document.getElementById('slaveCounter').innerHTML = '(' +
-        onlineSlavesBackup.length + '): Using ' + usedCoreCount + '/' +
+        onlineSlavesBackup.length + '): <br />Using ' + usedCoreCount + '/' +
         totalCoreCount + ' cores (' + cpuUsageRate +'%) on ' +
         onlineSlavesFiltered.length + ' host';
     if (onlineSlavesFiltered.length != 1) {
       document.getElementById('slaveCounter').innerHTML += 's';
     }
+
+    document.getElementById('slaveCounter').innerHTML += '<br />Load Avg -- ' +
+      '1-min: ' + (100*totalLoad1/totalCoreCount).toFixed(1) + '%, ' +
+      '5-min: ' + (100*totalLoad5/totalCoreCount).toFixed(1) + '%, ' +
+      '15-min: ' + (100*totalLoad15/totalCoreCount).toFixed() + '%';
+
     document.getElementById('clientCounter').innerText = '(' +
         onlineClients.length + ')';
 
@@ -713,6 +731,12 @@ $(document).ready(function() {
             tabCell.style='color:#222;background-color:#F58686;';
           }
         }
+        if (key2 == 'Ready') {
+          tabCell.style='color:#222;background-color:#9dd05e;';
+          if (msgData[key][key2] == 'False') {
+            tabCell.style='color:#222;background-color:#F58686;';
+          }
+        }
         if (key2 === 'UID') {
           currentUid = msgData[key][key2];
         }
@@ -720,7 +744,7 @@ $(document).ready(function() {
           activeCoreCount = msgData[key][key2];
           tabCell.innerHTML = '';
           for (var k = 0; k < msgData[key]['USED_CORES']; k++) {
-            tabCell.innerHTML += (1+k)%10 + ' ';
+            tabCell.innerHTML += (1+k) % 10 + ' ';
           }
           for (var k = msgData[key]['USED_CORES'];
                k < msgData[key][key2]; k++)

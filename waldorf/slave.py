@@ -8,8 +8,9 @@ from waldorf import _WaldorfAPI
 from waldorf.cfg import WaldorfCfg
 from waldorf.env import WaldorfEnv
 import sys
-from waldorf.util import DummyLogger, init_logger, get_path, \
+from waldorf.util import DummyLogger, init_logger, get_path, get_timestamp, \
     ColoredFormatter, get_system_info, obj_encode, get_local_ip
+from pathlib import Path
 import pickle
 import base64
 import threading
@@ -98,7 +99,8 @@ class CeleryWorker(mp.Process):
         self.app.conf.task_acks_late = True
         self.app.conf.worker_lost_wait = 60.0
         self.app.conf.result_expires = 1800
-        self.app.conf.w_prefetch_multi = self.multiplier
+        self.app.conf.worker_prefetch_multiplier = self.multiplier
+        self.logger.debug('prefetch multiplier: {}'.format(self.multiplier))
         self.logger.debug('finish app configure')
         self.setup_tasks()
         if self.cfg.debug >= 1:
@@ -127,10 +129,11 @@ class SockWaitThread(threading.Thread):
                 self.up.sock.wait()
             except IndexError:
                 # Restart SocketIO connection.
-                self.up.logger.debug('Index error. Connect to {}:{} with uid {}'
-                                     .format(self.up.cfg.master_ip,
-                                             self.up.cfg.waldorf_port,
-                                             self.up.uid))
+                self.up.logger_output('debug',
+                                      'Index error. Connect to {}:{} with uid {}'
+                                      .format(self.up.cfg.master_ip,
+                                              self.up.cfg.waldorf_port,
+                                              self.up.uid))
                 self.up.sock = SocketIO(self.up.cfg.master_ip,
                                         self.up.cfg.waldorf_port,
                                         cookies=self.up.cookies)
@@ -157,7 +160,13 @@ class _WaldorfSio(mp.Process):
                              'cpu_type': self.system_info.cpu_type,
                              'cpu_count': self.system_info.cpu_count,
                              'cfg_core': self.cfg.core,
-                             'mem': self.system_info.mem}
+                             'mem': self.system_info.mem,
+                             'load_avg1': ' ',
+                             'load_avg5': ' ',
+                             'load_avg15': ' ',
+                             'prefetch_multi': ' ',
+                             'ready': ' '}
+        self.update_load_avg()
         self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port)
         self.logger.debug('Connect to {}:{} with uid {}'.format(
             self.cfg.master_ip, self.cfg.waldorf_port, self.uid))
@@ -165,6 +174,13 @@ class _WaldorfSio(mp.Process):
         self.slave_ns.setup(self)
         self.events = {}
         self.info = {}
+
+    def update_load_avg(self):
+        load_avg = list(os.getloadavg())
+        load_avg = [str(round(i, 1)) for i in load_avg]
+        self.waldorf_info['load_avg1'] = load_avg[0]
+        self.waldorf_info['load_avg5'] = load_avg[1]
+        self.waldorf_info['load_avg15'] = load_avg[2]
 
     def setup_logger(self):
         if self.cfg.debug >= 1:
@@ -192,22 +208,43 @@ class _WaldorfSio(mp.Process):
             logger.addHandler(ch)
             self.logger = logger
 
+        # logger for writing local log
+        self.temp = True
+        dir = get_path('slave_log', abspath=str(Path.home()) + '/.waldorf')
+        file_name = get_timestamp()
+        self.temp_logger = init_logger(file_name, dir,
+                                       (logging.DEBUG, logging.DEBUG))
+        while len(os.listdir(dir)) > 5:
+            to_delete = sorted(os.listdir(dir))[0]
+            os.remove(os.path.join(dir, to_delete))
+
+    def logger_output(self, level, msg):
+        if level == 'info':
+            self.logger.info(msg)
+            if self.temp:
+                self.temp_logger.info(msg)
+        if level == 'debug':
+            self.logger.debug(msg)
+            if self.temp:
+                self.temp_logger.debug(msg)
+
     def put(self, r):
         self.cmd_queue[1].put(r)
 
     def check_ver(self):
         # TODO: Move this part to slave namespace?
-        self.logger.debug('enter on_check_ver')
+        self.logger_output('debug', 'enter on_check_ver')
         self.slave_ns.emit(_WaldorfAPI.CHECK_VER, waldorf.__version__)
         self.events['check_ver'] = threading.Event()
         self.events['check_ver'].wait()
         self.put(self.info['check_ver_resp'])
-        self.logger.debug('leave on_check_ver')
+        self.logger_output('debug', 'enter on_check_ver')
 
     def run(self):
         self.setup()
         SockWaitThread(self).start()
         self.check_ver()
+
         while True:
             cmd = self.cmd_queue[0].get()
             if cmd[0] == 'exit':
@@ -218,11 +255,12 @@ class _WaldorfSio(mp.Process):
                         uid, self.slave_ns.workers[uid][3]))
                     for task in self.slave_ns.workers[uid][3]:
                         print('task name: {}'.format(task[0]))
-                    self.slave_ns.info[uid]['worker'].terminate()
+                    if 'worker' in self.slave_ns.info[uid]:
+                        self.slave_ns.info[uid]['worker'].terminate()
                 break
         self.sock.disconnect()
         self.cmd_queue[1].put(0)
-        self.logger.debug('end')
+        self.logger_output('debug', 'end')
 
 
 class CheckCPUThread(threading.Thread):
@@ -262,33 +300,92 @@ class Namespace(SocketIONamespace):
         self.check_thread = CheckCPUThread(self.check_q)
         self.check_thread.start()
         self.w_prefetch_multi = 4
-        self.busy = False
+        self.busy = 0
+        self.up.waldorf_info['ready'] = 'True'
         self.emit(_WaldorfAPI.GET_INFO + '_resp',
                   obj_encode(self.up.waldorf_info))
+        self.time = time.time()
+        self.current_client = []
         threading.Thread(target=self.update, daemon=True).start()
 
     def update(self):
         time.sleep(10)
-        if len(self.workers.keys()) == 0 and not self.busy:
+
+        if len(self.workers.keys()) == 0 and self.up.cfg.core != 0 \
+                and self.busy == 0:
             self.check_q[0].put(self.up.cfg.core)
         if self.check_q[1].qsize() != 0:
             w_prefetch_multi = int(self.check_q[1].get())
-            if w_prefetch_multi != self.w_prefetch_multi and not self.busy and \
-                    len(self.workers.keys()) == 0:
+            if w_prefetch_multi != self.w_prefetch_multi and \
+                    self.busy == 0 and len(self.workers.keys()) == 0:
                 if len(self.workers.keys()) == 0:
-                    self.up.logger.info('w_prefetch_multi argument: {} -> {}'.
-                                        format(self.w_prefetch_multi,
-                                               w_prefetch_multi))
+                    self.up.logger_output('info',
+                                          'w_prefetch_multi argument: {} -> {}'
+                                          .format(self.w_prefetch_multi,
+                                                  w_prefetch_multi))
                     self.w_prefetch_multi = w_prefetch_multi
+                    self.up.waldorf_info['prefetch_multi'] = w_prefetch_multi
                 else:
-                    self.up.logger.info(
-                        'w_prefetch_multi argument is discarded: {}'.format(
-                            w_prefetch_multi))
+                    self.up.logger_output('info',
+                                          'w_prefetch_multi argument is '
+                                          'discarded: {}'.format(
+                                              w_prefetch_multi))
+        if len(self.workers.keys()) != 0 and time.time() - self.time > 300:
+            flag = False
+            if self.up.waldorf_info['cfg_core'] * 1.5 <= \
+                    float(self.up.waldorf_info['load_avg5']) and \
+                    self.w_prefetch_multi > 1:
+                self.up.logger_output('info',
+                                      'w_prefetch_multi argument: {} -> {}'
+                                      .format(self.w_prefetch_multi,
+                                              self.w_prefetch_multi - 1))
+                self.time = time.time()
+                self.w_prefetch_multi -= 1
+                self.up.waldorf_info[
+                    'prefetch_multi'] = self.w_prefetch_multi
+                flag = True
+            if self.up.waldorf_info['cfg_core'] * 0.8 > float(
+                    self.up.waldorf_info[
+                        'load_avg5']) and self.w_prefetch_multi < 6:
+                self.up.logger_output('info',
+                                      'w_prefetch_multi argument: {} -> {}'
+                                      .format(self.w_prefetch_multi,
+                                              self.w_prefetch_multi + 1))
+                self.time = time.time()
+                self.w_prefetch_multi += 1
+                self.up.waldorf_info[
+                    'prefetch_multi'] = self.w_prefetch_multi
+                flag = True
+            if flag:
+                self.busy += 1
+                self.up.waldorf_info['ready'] = 'True' \
+                    if self.busy == 0 else 'False'
+                self.log('changed prefetch_multi due to load average')
+
+                if self.up.waldorf_info['cfg_core'] > 0:
+                    for uid in self.workers:
+                        if 'worker' in self.info[uid]:
+                            self.info[uid]['worker'].terminate()
+
+                    self.log('terminated and wait for 1 seconds')
+                    time.sleep(1)
+
+                    # Restart workers one by one.
+                    for uid in self.workers:
+                        args = self.workers[uid]
+                        args = copy.deepcopy(args)
+                        args.extend([self.w_prefetch_multi, self.up.cfg])
+                        self.setup_worker(args)
+
+                self.busy -= 1
+                self.up.waldorf_info['ready'] = 'True' \
+                    if self.busy == 0 else 'False'
+
         threading.Thread(target=self.update).start()
 
     def log(self, msg):
         if hasattr(self, 'up'):
-            self.up.logger.debug(msg)
+            self.up.logger_output('debug', msg)
 
     def on_connect(self):
         print('on_connect')
@@ -307,22 +404,24 @@ class Namespace(SocketIONamespace):
     def on_echo(self, sid):
         self.emit(_WaldorfAPI.ECHO + '_resp', sid)
 
-    def get_env(self, uid, args):
+    def get_env(self, uid, args, restart):
         """Set up virtual environment."""
-        self.busy = True
+        self.busy += 1
+        self.up.waldorf_info['ready'] = 'True' if self.busy == 0 else 'False'
         info = self.get_info_dict(uid)
         name, pairs, suites, cfg = pickle.loads(base64.b64decode(args))
         info['get_env'] = [name, pairs, suites, cfg]
         self.envs[uid] = WaldorfEnv(name, cfg, self.up.logger)
         resp = self.envs[uid].get_env(pairs, suites)
         hostname = socket.gethostname()
-        self.emit(_WaldorfAPI.GET_ENV + '_resp', (uid, hostname, resp))
-        self.busy = False
+        self.emit(_WaldorfAPI.GET_ENV + '_resp', (uid, hostname, resp, restart))
+        self.busy -= 1
+        self.up.waldorf_info['ready'] = 'True' if self.busy == 0 else 'False'
 
-    def on_get_env(self, uid, args):
+    def on_get_env(self, uid, args, restart=False):
         self.log('on_get_env')
         threading.Thread(target=self.get_env,
-                         args=(uid, args), daemon=True).start()
+                         args=(uid, args, restart), daemon=True).start()
 
     def on_reg_task(self, uid, task_name, task_code, opts):
         self.log('on_reg_task')
@@ -333,6 +432,7 @@ class Namespace(SocketIONamespace):
         """Set up Celery worker."""
         uid, py_path, env_path, tasks, prefetch_multiplier, cfg = args
         app_name = 'app-' + uid
+        self.log('setup worker for uid: {}'.format(uid))
         mp.set_executable(py_path)
         w = CeleryWorker(env_path, app_name,
                          tasks, prefetch_multiplier, cfg)
@@ -343,9 +443,12 @@ class Namespace(SocketIONamespace):
         self.info[uid]['worker'] = w
         mp.set_executable(sys.executable)
 
-    def on_freeze(self, uid, sid):
+    def on_freeze(self, uid, sid, restart=False):
         """Freeze worker configuration and set up worker."""
-        self.busy = True
+        while self.busy > 0:
+            time.sleep(0.5)
+        self.busy += 1
+        self.up.waldorf_info['ready'] = 'True' if self.busy == 0 else 'False'
         self.log('on_freeze')
         args = [uid, self.envs[uid].get_py_path(),
                 self.envs[uid].get_env_path(),
@@ -353,9 +456,12 @@ class Namespace(SocketIONamespace):
         self.workers[uid] = args
         args = copy.deepcopy(args)
         args.extend([self.w_prefetch_multi, self.up.cfg])
-        self.setup_worker(args)
-        self.emit(_WaldorfAPI.FREEZE + '_resp', sid)
-        self.busy = False
+        if self.up.waldorf_info['cfg_core'] != 0:
+            self.setup_worker(args)
+        self.current_client.append(uid)
+        self.emit(_WaldorfAPI.FREEZE + '_resp', (sid, restart))
+        self.busy -= 1
+        self.up.waldorf_info['ready'] = 'True' if self.busy == 0 else 'False'
 
     def on_check_ver_resp(self, version):
         self.log('on_check_ver_resp')
@@ -370,20 +476,48 @@ class Namespace(SocketIONamespace):
     def on_clean_up(self, uid):
         """Clean up and terminate Celery worker."""
         self.log('on_clean_up')
-        if uid in self.info and 'worker' in self.info[uid]:
-            self.info[uid]['worker'].terminate()
+        self.log('request client uid: {}'.format(uid))
+
+        if uid in self.info:
+            if uid in self.current_client:
+                self.log('removing client uid: {}'.format(uid))
+                self.current_client.remove(uid)
+            if 'worker' in self.info[uid]:
+                self.log('terminate worker of uid {}'.format(uid))
+                self.info[uid]['worker'].terminate()
             self.workers.pop(uid, None)
 
-    def on_change_core(self, core):
+        self.log('current running client(s):')
+        for client_uid in self.current_client:
+            self.log(client_uid)
+
+    def on_change_core(self, core, cur_clients):
         """Change core usage on runtime."""
-        self.busy = True
+        self.busy += 1
+        self.up.waldorf_info['ready'] = 'True' if self.busy == 0 else 'False'
         self.log('on_change_core')
         try:
+            # Update local clients to master's
+            uids = list(cur_clients.keys())
+            for uid in copy.deepcopy(self.current_client):
+                if uid in uids:
+                    continue
+                self.log('local client not found on master, uid {}'.
+                         format(uid))
+                if uid in self.info and 'worker' in self.info[uid]:
+                    self.log('terminate worker of uid {}'.format(uid))
+                    if uid in self.current_client:
+                        self.log('removing client uid: {}'.format(uid))
+                        self.current_client.remove(uid)
+                    self.info[uid]['worker'].terminate()
+                    self.workers.pop(uid, None)
+
             # Set up affinity.
             self.up.cfg.core = core
             self.up.waldorf_info['cfg_core'] = core
             self.affinity = [i for i in range(mp.cpu_count())][
                             -self.up.cfg.core:]
+            self.log('changed core to {}'.format(core))
 
             # Stop workers.
             for uid in self.workers:
@@ -392,18 +526,61 @@ class Namespace(SocketIONamespace):
             self.log('terminated and wait for 1 seconds')
             time.sleep(1)
 
-            # Restart workers one by one.
-            for uid in self.workers:
-                args = self.workers[uid]
-                args = copy.deepcopy(args)
-                args.extend([self.w_prefetch_multi, self.up.cfg])
-                self.setup_worker(args)
+            if core != 0:
+                # Restart workers one by one.
+                for uid in self.workers:
+                    args = self.workers[uid]
+                    args = copy.deepcopy(args)
+                    args.extend([self.w_prefetch_multi, self.up.cfg])
+                    self.setup_worker(args)
             self.emit(_WaldorfAPI.CHANGE_CORE + '_resp', (0, 'Success'))
             self.log('Success')
+
         except Exception as e:
             self.emit(_WaldorfAPI.CHANGE_CORE + '_resp',
                       (-1, traceback.format_exc()))
-        self.busy = False
+        self.busy -= 1
+        self.up.waldorf_info['ready'] = 'True' if self.busy == 0 else 'False'
+
+    def on_update_table(self, args):
+        try:
+            self.up.update_load_avg()
+            new_info = {}
+            for arg in args:
+                if arg in self.up.waldorf_info:
+                    new_info[arg] = self.up.waldorf_info[arg]
+            self.emit(_WaldorfAPI.UPDATE_TABLE + '_resp', new_info)
+        except Exception as e:
+            self.emit(_WaldorfAPI.UPDATE_TABLE + '_resp',
+                      traceback.format_exc())
+
+    def on_restart_task(self, args):
+        # Update local clients to master's
+        uids = list(args.keys())
+        for uid in copy.deepcopy(self.current_client):
+            if uid in uids:
+                continue
+            self.log('local client not found on master, uid {}'.format(uid))
+            if uid in self.info and 'worker' in self.info[uid]:
+                self.log('terminate worker of uid {}'.format(uid))
+                if uid in self.current_client:
+                    self.log('removing client uid: {}'.format(uid))
+                    self.current_client.remove(uid)
+                self.info[uid]['worker'].terminate()
+                self.workers.pop(uid, None)
+
+        # Restarting local client tasks
+        for uid, arg in args.items():
+            if uid in self.current_client:
+                continue
+            env, tasks, sid = arg
+            self.on_get_env(uid, env, restart=True)
+            for task in tasks:
+                task_name, task_code, opts = task
+                self.on_reg_task(uid, task_name, task_code, opts)
+                self.log('restarting task {} from client uid {}'.
+                         format(task_name, uid))
+            self.on_freeze(uid, sid, restart=True)
 
 
 class WaldorfSlave(object):
@@ -441,14 +618,14 @@ class WaldorfSlave(object):
             while True:
                 cmd = input('cmd:\n')
                 if cmd == 'exit':
-                    print('L442: Exiting')
+                    print('L621: Exiting')
                     self._sio_queue[0].put((cmd,))
                     self._sio_queue[1].get()
                     break
         except KeyboardInterrupt:
             self._sio_queue[0].put(('exit',))
             self._sio_queue[1].get()
-        print('L449: End')
+        print('L628: End')
 
 
 def parse_args():
