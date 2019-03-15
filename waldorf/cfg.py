@@ -1,4 +1,7 @@
 import multiprocessing as mp
+import jsonpickle
+from pathlib import Path
+from waldorf.util import get_path
 
 
 class WaldorfEnvCfg(object):
@@ -56,7 +59,12 @@ class WaldorfCfg(object):
         self.memcached_port = 11211
         self.core = mp.cpu_count()
         self.get_interval = 0.1
+        self.submit_limit = 0
         self.result_timeout = 300
+        # If retry is not enabled
+        # it will return None when result is not available
+        # It only work for timeout situation
+        self.retry_enable = True
         self.retry_times = 3
         self.env_cfg = WaldorfEnvCfg()
 
@@ -107,3 +115,27 @@ class WaldorfCfg(object):
         }
         self.celery_broker = self.celery['broker'][self.broker]
         self.celery_backend = self.celery['backend'][self.backend]
+
+    @staticmethod
+    def dumps(obj):
+        return jsonpickle.encode(obj)
+
+    @staticmethod
+    def loads(string):
+        return jsonpickle.decode(string)
+
+
+def load_cfg(prefix):
+    cfg_dir = get_path('cfg', abspath=str(Path.home()) + '/.waldorf')
+    cfg_fp = cfg_dir + '/{}_cfg.json'.format(prefix)
+    cfg_file = Path(cfg_fp)
+    if cfg_file.exists() and cfg_file.is_file():
+        return WaldorfCfg.loads(open(cfg_fp).read())
+    return WaldorfCfg()
+
+
+def save_cfg(prefix, cfg):
+    cfg_dir = get_path('cfg', abspath=str(Path.home()) + '/.waldorf')
+    cfg_fp = cfg_dir + '/{}_cfg.json'.format(prefix)
+    with open(cfg_fp, 'w') as f:
+        f.write(WaldorfCfg.dumps(cfg))

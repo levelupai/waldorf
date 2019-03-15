@@ -46,6 +46,9 @@ class GymDemo(object):
 
     def setup_waldorf(self):
         cfg = WaldorfCfg(master_ip=MASTER_IP)
+        # Debug level 0: no debug log
+        # Debug level 1: output waldorf log
+        # Debug level 2: output waldorf log and socketio log
         cfg.debug = 1
 
         cfg.env_cfg.already_exist = 'remove'
@@ -56,7 +59,7 @@ class GymDemo(object):
         # cfg.env_cfg.git_credential = open('credential', 'rb').read()
 
         # Create a Waldorf client and connect it to the Master server
-        self.client = WaldorfClient(cfg, limit=50)
+        self.client = WaldorfClient(cfg)
 
         # Command pair is used to define all sorts of command.
         # These commands are used to create environment
@@ -80,6 +83,13 @@ class GymDemo(object):
         # Setup suites will setup the environment and install requirements.
         # You can use multiple setup suites to make sure the environment
         # is setup as you need.
+        # The following setup suites will excute these commands step by step:
+        # open a new terminal
+        # $ source ENV_NAME/bin/activate
+        # (ENV_NAME)$ python
+        # >>> import gym
+        # >>> gym.__version__
+        # >>> exit()
         suites = [
             SetupSuite(
                 Suite([CmdPair(MinorCmd.CREATE_SESS),
@@ -118,16 +128,12 @@ class GymDemo(object):
 
     def callback(self, result):
         # Use callback to collect results
+        # Callback function should not be too complex
+        # Waldorf will use another thread to retrieve result and invoke callback
         self.results.append(result)
 
     def play(self):
-        # You can use map to run all task
-        # It will block until all results are collected
-        result = self.client.map(
-            collect_exp, [('CartPole-v0', random.randint(20, 50))
-                          for i in range(50)])
-
-        # You can also use submit with callback
+        # You can use submit with callback
         # which will let you collect results when the task is done
         for i in range(100):
             episode = random.randint(20, 50)
@@ -146,8 +152,12 @@ class GymDemo(object):
 
 def main():
     demo = GymDemo()
-    demo.play()
-    demo.close()
+    try:
+        demo.play()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        demo.close()
 
 
 if __name__ == '__main__':

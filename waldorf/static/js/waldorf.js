@@ -66,7 +66,7 @@ function toggleArrow(divName, transitionTime) {
   }
 }
 
-function applyCoreChange() {
+function applyCoreChange(t) {
   var newCoreCount = document.getElementById('coreSelect').value;
   var element = document.getElementById('singleSelect');
   var uid = element.options[element.selectedIndex].value;
@@ -74,6 +74,11 @@ function applyCoreChange() {
     socket.emit('change_core', [uid, parseInt(newCoreCount, 10)]);
   }
   unfreezeUpdates();
+  t.disabled = 'true';
+  function reactivate(t) {
+    t.removeAttribute('disabled');
+  }
+  setTimeout(reactivate, 2000, t);
 }
 
 function updateExportTable(id, value) {
@@ -156,7 +161,7 @@ function exportFile() {
 }
 
 
-function batchApplyCpuChanges() {
+function batchApplyCpuChanges(t) {
   for (var i in exportTableSettings) {
     var newUsedCores = parseInt(exportTableSettings[i], 10);
     for (var j in onlineSlavesBackup) {
@@ -176,6 +181,11 @@ function batchApplyCpuChanges() {
   document.getElementById('applyBatchSettingsMessages').innerHTML =
       'Settings applied. Please wait and check table below for updates.';
   unfreezeUpdates();
+  t.disabled = 'true';
+  function reactivate(t) {
+    t.removeAttribute('disabled');
+  }
+  setTimeout(reactivate, 2000, t);
 }
 
 function updateCoreSelector() {
@@ -606,18 +616,6 @@ $(document).ready(function() {
       return parseInt(a) + parseInt(b['CORES']);
     }, 0);
 
-    var totalLoad1 = onlineSlavesFiltered.reduce(function(a, b) {
-      return parseFloat(a) + parseFloat(b['LOAD(1)']);
-    }, 0);
-
-    var totalLoad5 = onlineSlavesFiltered.reduce(function(a, b) {
-      return parseFloat(a) + parseFloat(b['LOAD(5)']);
-    }, 0);
-
-    var totalLoad15 = onlineSlavesFiltered.reduce(function(a, b) {
-      return parseFloat(a) + parseFloat(b['LOAD(15)']);
-    }, 0);
-
     var onlineClients = clients.filter(function(value, index, array) {
       return value['State'] == 'Online';
     });
@@ -638,10 +636,18 @@ $(document).ready(function() {
       document.getElementById('slaveCounter').innerHTML += 's';
     }
 
-    document.getElementById('slaveCounter').innerHTML += '<br />Load Avg -- ' +
-      '1-min: ' + (100*totalLoad1/totalCoreCount).toFixed(1) + '%, ' +
-      '5-min: ' + (100*totalLoad5/totalCoreCount).toFixed(1) + '%, ' +
-      '15-min: ' + (100*totalLoad15/totalCoreCount).toFixed() + '%';
+    var onlineSlavesInUse = onlineSlavesFiltered.filter(function(a) {
+      return a['USED_CORES'] > 0;
+    });
+    var onlineSlavesLoadAvg = 0.0;
+    if (onlineSlavesInUse.length > 0) {
+        onlineSlavesLoadAvg = onlineSlavesInUse.reduce(function(a, b) {
+            return a + parseFloat(b['LOAD(%)']);
+        }, 0.0) / onlineSlavesInUse.length;
+    }
+
+    document.getElementById('slaveCounter').innerHTML += '<br />Load Avg: ' +
+        onlineSlavesLoadAvg.toFixed(1) + '%';
 
     document.getElementById('clientCounter').innerText = '(' +
         onlineClients.length + ')';
@@ -670,7 +676,7 @@ $(document).ready(function() {
     }
     socket.emit('get_info');
     return false;
-  }
+  };
 
   setInterval(refreshInfo, 3000);
   setInterval(connTimerUpdate, 1000);
@@ -758,7 +764,7 @@ $(document).ready(function() {
     }
     // Append newly created table to HTML div
     var divContainer = document.getElementById(tableDivName + 'Div');
-    var headRowClassName = []
+    var headRowClassName = [];
     if (tableDivName=='slaves' && divContainer.childNodes.length >= 3) {
       var existingTable = divContainer.childNodes[3];
       if (existingTable.tHead !== undefined) {

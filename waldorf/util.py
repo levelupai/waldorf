@@ -139,7 +139,7 @@ class ColoredFormatter(logging.Formatter):
         levelname = record.levelname
         if levelname in COLORS:
             levelname_color = COLOR_SEQ % (
-                30 + COLORS[levelname]) + levelname + RESET_SEQ
+                    30 + COLORS[levelname]) + levelname + RESET_SEQ
             record.levelname = levelname_color
         message = logging.Formatter.format(self, record)
         message = message.replace('$RESET', RESET_SEQ) \
@@ -151,7 +151,13 @@ class ColoredFormatter(logging.Formatter):
         return message + RESET_SEQ
 
 
-def init_logger(name, path=None, level=(logging.DEBUG, logging.INFO)):
+def get_frame():
+    import sys
+    return sys._getframe(1)
+
+
+def init_logger(name, path=None, level=(logging.INFO, logging.DEBUG),
+                enable=(True, True)):
     """Initialize a logger with certain name
 
     Args:
@@ -160,46 +166,116 @@ def init_logger(name, path=None, level=(logging.DEBUG, logging.INFO)):
             the log file will be stored, for example
             '/tmp/log'
         level (tuple): Optional, consist of two logging level.
-            The first stands for logging level of file handler,
-            and the second stands for logging level of console handler.
+            The first stands for logging level of console handler,
+            and the second stands for logging level of file handler.
+        enable (tuple): Optional, define whether each handler is enabled.
+            The first enables console handler,
+            and the second enables file handler.
 
     Returns:
         logging.Logger: logger instance
     """
     import logging.handlers
     import sys
+    import types
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
     logger.propagate = 0
-    _nf = ['[%(asctime)s]',
-           '[%(name)s]',
-           '[%(filename)20s:%(funcName)15s:%(lineno)5d]',
-           '[%(levelname)s]',
-           ' %(message)s']
-    _cf = ['$GREEN[%(asctime)s]$RESET',
-           '[%(name)s]',
-           '$BLUE[%(filename)20s:%(funcName)15s:%(lineno)5d]$RESET',
-           '[%(levelname)s]',
-           ' $CYAN%(message)s$RESET']
-    nformatter = logging.Formatter('-'.join(_nf))
-    cformatter = ColoredFormatter('-'.join(_cf))
-
     if path:
         path += '/' + name + '.log'
     else:
         path = get_path('log') + '/' + name + '.log'
 
-    rf = logging.handlers.RotatingFileHandler(path, maxBytes=50 * 1024 * 1024,
-                                              backupCount=5)
-    rf.setLevel(level[0])
-    rf.setFormatter(nformatter)
+    if enable[0]:
+        _cf = ['$GREEN[%(asctime)s]$RESET',
+               '[%(name)s]',
+               '$BLUE[%(filename)20s:%(funcName)15s:%(lineno)5d]$RESET',
+               '[%(levelname)s]',
+               ' $CYAN%(message)s$RESET']
+        cformatter = ColoredFormatter('-'.join(_cf))
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setLevel(level[0])
+        ch.setFormatter(cformatter)
+        logger.addHandler(ch)
 
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(level[1])
-    ch.setFormatter(cformatter)
+    if enable[1]:
+        _nf = ['[%(asctime)s]',
+               '[%(name)s]',
+               '[%(filename)20s:%(funcName)15s:%(lineno)5d]',
+               '[%(levelname)s]',
+               ' %(message)s']
+        nformatter = logging.Formatter('-'.join(_nf))
+        rf = logging.handlers.RotatingFileHandler(path,
+                                                  maxBytes=50 * 1024 * 1024,
+                                                  backupCount=5)
+        rf.setLevel(level[1])
+        rf.setFormatter(nformatter)
+        logger.addHandler(rf)
 
-    logger.addHandler(rf)
-    logger.addHandler(ch)
+    def findCaller(self, stack_info=False, frame=None):
+        """
+        Find the stack frame of the caller so that we can note the source
+        file name, line number and function name.
+        """
+        from logging import currentframe, os, _srcfile, io, traceback
+        if frame:
+            f = frame
+        else:
+            f = currentframe()
+            # On some versions of IronPython, currentframe() returns None if
+            # IronPython isn't run with -X:Frames.
+            if f is not None:
+                f = f.f_back
+        rv = "(unknown file)", 0, "(unknown function)", None
+        while hasattr(f, "f_code"):
+            co = f.f_code
+            filename = os.path.normcase(co.co_filename)
+            if filename == _srcfile:
+                f = f.f_back
+                continue
+            sinfo = None
+            if stack_info:
+                sio = io.StringIO()
+                sio.write('Stack (most recent call last):\n')
+                traceback.print_stack(f, file=sio)
+                sinfo = sio.getvalue()
+                if sinfo[-1] == '\n':
+                    sinfo = sinfo[:-1]
+                sio.close()
+            rv = (co.co_filename, f.f_lineno, co.co_name, sinfo)
+            break
+        return rv
+
+    def _log(self, level, msg, args, exc_info=None, extra=None,
+             stack_info=False, frame=None):
+        """
+        Low-level logging routine which creates a LogRecord and then calls
+        all the handlers of this logger to handle the record.
+        """
+        from logging import sys, _srcfile
+        sinfo = None
+        if _srcfile:
+            # IronPython doesn't track Python frames, so findCaller raises an
+            # exception on some versions of IronPython. We trap it here so that
+            # IronPython can use logging.
+            try:
+                fn, lno, func, sinfo = self.findCaller(stack_info, frame)
+            except ValueError:  # pragma: no cover
+                fn, lno, func = "(unknown file)", 0, "(unknown function)"
+        else:  # pragma: no cover
+            fn, lno, func = "(unknown file)", 0, "(unknown function)"
+        if exc_info:
+            if isinstance(exc_info, BaseException):
+                exc_info = (type(exc_info), exc_info, exc_info.__traceback__)
+            elif not isinstance(exc_info, tuple):
+                exc_info = sys.exc_info()
+        record = self.makeRecord(self.name, level, fn, lno, msg, args,
+                                 exc_info, func, extra, sinfo)
+        self.handle(record)
+
+    func_type = types.MethodType
+    logger.findCaller = func_type(findCaller, logger)
+    logger._log = func_type(_log, logger)
     return logger
 
 
@@ -238,7 +314,7 @@ class DummyLogger(object):
     def log(self, level, msg, *args, **kwargs):
         pass
 
-    def findCaller(self, stack_info=False):
+    def findCaller(self, stack_info=False, frame=None):
         pass
 
     def makeRecord(self, name, level, fn, lno, msg, args, exc_info,
@@ -246,7 +322,7 @@ class DummyLogger(object):
         pass
 
     def _log(self, level, msg, args, exc_info=None, extra=None,
-             stack_info=False):
+             stack_info=False, frame=None):
         pass
 
     def handle(self, record):

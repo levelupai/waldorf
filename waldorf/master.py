@@ -8,7 +8,7 @@ from waldorf.util import DummyLogger, init_logger, \
     get_path, ColoredFormatter, obj_decode, obj_encode
 import logging
 import logging.handlers
-from waldorf.cfg import WaldorfCfg
+from waldorf.cfg import WaldorfCfg, load_cfg, save_cfg
 import argparse
 import asyncio
 from Crypto import Random
@@ -196,15 +196,18 @@ class AdminNamespace(socketio.AsyncNamespace):
             await self.up.slave_ns.emit(_WaldorfAPI.CHANGE_CORE,
                                         (core, self.up.registered_info),
                                         room=_slave_sid)
+            self.up.logger.debug('wait for change core response')
             await self.events['change_core'].wait()
             resp = self.info['change_core_resp'][uid]
             if resp[0] == 0:
                 await self.emit(_WaldorfAPI.CHANGE_CORE + '_resp',
                                 json.dumps([0, 'Success.']), room=sid)
+                self.up.logger.debug('change core success.')
             else:
+                info = json.dumps([-1, resp[1]])
                 await self.emit(_WaldorfAPI.CHANGE_CORE + '_resp',
-                                json.dumps([-1, resp[1]]),
-                                room=sid)
+                                info, room=sid)
+                self.up.logger.debug('change core failed. {}'.format(info))
         else:
             await self.emit(_WaldorfAPI.CHANGE_CORE + '_resp',
                             json.dumps([-1, 'Failed to find uid.']), room=sid)
@@ -237,6 +240,7 @@ class ClientNamespace(socketio.AsyncNamespace):
         self.connections = {}
         self.exit_dict = {}
         self.properties = {}
+        self.client_num = 0
         asyncio.ensure_future(self.update())
 
     async def update(self):
@@ -308,6 +312,9 @@ class ClientNamespace(socketio.AsyncNamespace):
         self.info['uid'][uid]['sid'] = sid
         self.info['uid'][uid]['hostname'] = hostname
         self.info['sid'][sid]['uid'] = uid
+        self.enter_room(sid, 'client')
+        self.client_num += 1
+        await self.update_client_cores('client')
         self.connections[uid] = hostname
         if uid not in self.up.registered_info:
             self.up.registered_info[uid] = [None, [], None]
@@ -344,7 +351,19 @@ class ClientNamespace(socketio.AsyncNamespace):
         await self.emit(_WaldorfAPI.CHECK_VER + '_resp',
                         waldorf.__version__, room=sid)
 
-    def on_disconnect(self, sid):
+    async def update_client_cores(self, room):
+        if self.client_num == 0:
+            return
+        await self.emit(
+            _WaldorfAPI.GET_CORES + '_resp',
+            int(self.up.slave_ns.available_cores * 1.05) // self.client_num,
+            room=room)
+
+    async def on_get_cores(self, sid):
+        self.up.logger.debug('on_get_cores')
+        await self.update_client_cores(sid)
+
+    async def on_disconnect(self, sid):
         """Client disconnect.
 
         Update table and remove active connections.
@@ -368,6 +387,9 @@ class ClientNamespace(socketio.AsyncNamespace):
                 self.up.logger.debug('client {} disconnect abnormally, uid: {}.'
                                      .format(self.info['uid'][uid]['hostname'],
                                              uid))
+        self.leave_room(sid, 'client')
+        self.client_num -= 1
+        await self.update_client_cores('client')
         self.connections.pop(uid, None)
 
     def on_exit(self, sid, uid):
@@ -476,7 +498,12 @@ class SlaveNamespace(socketio.AsyncNamespace):
         self.connections = {}
         self.exit_dict = {}
         self.properties = {}
+        self.available_cores = 0
         asyncio.ensure_future(self.update())
+
+    async def update_available_cores(self, cores_diff):
+        self.available_cores += cores_diff
+        await self.up.client_ns.update_client_cores('client')
 
     async def update(self):
         """Check connections every 5 seconds.
@@ -495,8 +522,8 @@ class SlaveNamespace(socketio.AsyncNamespace):
                     'Connection lost over {} sec. Slave uid: {} is removed'.
                         format(self.lost_timeout, k))
                 self.info['uid'].pop(k)
-        args = ['load_avg1', 'load_avg5', 'load_avg15', 'prefetch_multi',
-                'ready']
+        args = ['load_per', 'load_avg1', 'load_avg5', 'load_avg15',
+                'prefetch_multi', 'ready']
         await self.emit(_WaldorfAPI.UPDATE_TABLE, args, room='slave')
         asyncio.ensure_future(self.update())
 
@@ -509,12 +536,10 @@ class SlaveNamespace(socketio.AsyncNamespace):
         if sid in self.info['sid'] and 'uid' in self.info['sid'][sid]:
             uid = self.info['sid'][sid]['uid']
             for k, v in args.items():
+                if k == 'load_per':
+                    self.properties[uid]['LOAD(%)'] = v
                 if k == 'load_avg1':
                     self.properties[uid]['LOAD(1)'] = v
-                    self.properties[uid]['LOAD(%)'] = '{}%'.format(round(
-                        100 * float(v) / float(
-                            self.properties[uid]['USED_CORES']), 1)) if \
-                    self.properties[uid]['USED_CORES'] > 0 else '0.0%'
                 if k == 'load_avg5':
                     self.properties[uid]['LOAD(5)'] = v
                 if k == 'load_avg15':
@@ -556,6 +581,8 @@ class SlaveNamespace(socketio.AsyncNamespace):
         self.info['uid'][uid]['connect_time'] = time.time()
         self.info['uid'][uid]['connect_time_readable'] = \
             datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self.info['uid'][uid].pop('disconnect_time', None)
+        self.info['uid'][uid].pop('disconnect_time_readable', None)
         self.info['uid'][uid]['sid'] = sid
         self.info['uid'][uid]['hostname'] = hostname
         self.info['sid'][sid]['uid'] = uid
@@ -584,11 +611,14 @@ class SlaveNamespace(socketio.AsyncNamespace):
         }
         # Update table
         self.up.md_table.update_object(uid + '_s', self.properties[uid])
+        # Update available cores
+        await self.update_available_cores(self.properties[uid]['USED_CORES'])
 
         # Send existing tasks to slave
-        self.up.logger.debug(
-            'resending {} task(s) to slave, hostname: {}, uid: {}'.format(
-                len(self.up.registered_info), hostname, uid))
+        if len(self.up.registered_info) > 0:
+            self.up.logger.debug(
+                'resending {} task(s) to slave, hostname: {}, uid: {}'.format(
+                    len(self.up.registered_info), hostname, uid))
         await self.emit(_WaldorfAPI.RESTART_TASK, self.up.registered_info,
                         room=sid)
 
@@ -601,8 +631,8 @@ class SlaveNamespace(socketio.AsyncNamespace):
         await self.emit(_WaldorfAPI.CHECK_VER + '_resp',
                         waldorf.__version__, room=sid)
 
-    def on_disconnect(self, sid):
-        """Client disconnect.
+    async def on_disconnect(self, sid):
+        """Slave disconnect.
 
         Update table and remove active connections.
         It will not remove the slave from the table.
@@ -612,21 +642,25 @@ class SlaveNamespace(socketio.AsyncNamespace):
         """
         uid = self.info['sid'][sid]['uid']
         self.info['sid'].pop(sid, None)
-        if uid in self.exit_dict:
-            self.up.logger.debug('slave {} disconnect, uid: {}.'.format(
-                self.info['uid'][uid]['hostname'], uid))
-            self.properties[uid]['State'] = 'Offline'
-        else:
-            self.up.logger.debug('slave {} disconnect abnormally, uid: {}.'
-                                 .format(self.info['uid'][uid]['hostname'],
-                                         uid))
-            self.properties[uid]['State'] = 'Offline(Abnormally)'
         self.info['uid'][uid]['disconnect_time'] = time.time()
         self.info['uid'][uid]['disconnect_time_readable'] = \
             datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.properties[uid]['DisconnectTime'] = \
             self.info['uid'][uid]['disconnect_time_readable']
+        if uid in self.exit_dict:
+            self.up.logger.debug('slave {} disconnect, uid: {}.'.format(
+                self.info['uid'][uid]['hostname'], uid))
+            self.properties[uid]['State'] = 'Offline'
+            self.info['uid'].pop(uid)
+        else:
+            self.up.logger.debug('slave {} disconnect abnormally, uid: {}.'
+                                 .format(self.info['uid'][uid]['hostname'],
+                                         uid))
+            self.properties[uid]['State'] = 'Offline(Abnormally)'
+        # Update table
         self.up.md_table.update_object(uid + '_s', self.properties[uid])
+        # Update available cores
+        await self.update_available_cores(-self.properties[uid]['USED_CORES'])
         self.leave_room(sid, 'slave')
         self.connections.pop(uid, None)
 
@@ -660,7 +694,6 @@ class SlaveNamespace(socketio.AsyncNamespace):
 
     async def on_echo_resp(self, sid, client_sid):
         """Echo response from slaves."""
-        # TODO: move client side wait to master? like get_env
         self.up.logger.debug('on_echo_resp')
         self.up.logger.debug('get response from {}'.format(
             self.info['uid'][self.info['sid'][sid]['uid']]['hostname']))
@@ -669,7 +702,6 @@ class SlaveNamespace(socketio.AsyncNamespace):
 
     async def on_freeze_resp(self, sid, args):
         """Freeze response from slaves."""
-        # TODO: move client side wait to master? like get_env
         client_sid, restart = args
         self.up.logger.debug('on_freeze_resp')
         self.up.logger.debug('get response from {}'.format(
@@ -678,14 +710,20 @@ class SlaveNamespace(socketio.AsyncNamespace):
             await self.up.client_ns.emit(
                 _WaldorfAPI.FREEZE + '_resp', 'slave_' + sid, room=client_sid)
 
-    def on_change_core_resp(self, sid, resp):
+    async def on_change_core_resp(self, sid, resp):
+        """Change core response from slaves."""
+        self.up.logger.debug('on_change_core_resp')
         uid = self.info['sid'][sid]['uid']
         self.up.admin_ns.info['change_core_resp'][uid] = resp
         if resp[0] == 0:
+            old = self.properties[uid]['USED_CORES']
             self.properties[uid]['USED_CORES'] = \
                 self.up.admin_ns.info['change_core'][uid]
-            self.up.md_table.update_object(uid + '_s',
-                                           self.properties[uid])
+            # Update table
+            self.up.md_table.update_object(uid + '_s', self.properties[uid])
+            # Update available cores
+            await self.update_available_cores(
+                self.properties[uid]['USED_CORES'] - old)
         self.up.admin_ns.events['change_core'].set()
 
 
@@ -702,21 +740,22 @@ class WaldorfMaster(object):
             cmd = input('cmd:\n')
             if cmd == 'exit':
                 self.app.terminate()
-                print('L705: Exiting')
+                print('L743: Exiting')
                 break
             else:
                 self.web_queue.put(cmd)
-        print('L709: End')
+        print('L747: End')
 
 
 def parse_args():
-    cfg = WaldorfCfg()
+    cfg = load_cfg('master')
     parser = argparse.ArgumentParser(description='Waldorf master')
     parser.add_argument('-p', '--port', type=int, default=cfg.waldorf_port)
     parser.add_argument('-d', '--debug', type=int, default=cfg.debug)
     args = parser.parse_args()
     cfg.waldorf_port = args.port
     cfg.debug = args.debug
+    save_cfg('master', cfg)
     return cfg
 
 

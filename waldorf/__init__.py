@@ -1,13 +1,13 @@
-__version__ = '0.4.60'
+__version__ = '0.5.0'
 
 
 class _WaldorfAPI(object):
     """Event names used by Waldorf"""
     GET_ENV = 'get_env'
+    GET_CORES = 'get_cores'
     REG_TASK = 'reg_task'
     FREEZE = 'freeze'
     SUBMIT = 'submit'
-    MAP = 'map'
     CLEAN_UP = 'clean_up'
     CHECK_SLAVE = 'check_slave'
     ECHO = 'echo'

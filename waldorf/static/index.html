@@ -40,7 +40,7 @@
             <form id="batchExportForm"  class="leftIndent"></form>
             <div id="editSettingsDiv"  class="leftIndent">Mode name: <input type="text" id="batchExportName" maxlength="20" value="Default" />
                 <p>
-                    <input type="submit" value="Batch Apply Settings" onclick="batchApplyCpuChanges()"/> <span id="applyBatchSettingsMessages"></span>
+                    <input type="submit" value="Batch Apply Settings" onclick="batchApplyCpuChanges(this)"/> <span id="applyBatchSettingsMessages"></span>
                 </p>
                 <p>
                     <input type="submit" value="Save Settings" onclick="saveConfigToLocalStorage()"/>&nbsp;&nbsp;&nbsp;
@@ -60,7 +60,7 @@
             <select id="coreSelect" onfocus="freezeUpdates()" onchange="unfreezeUpdates()">
                 <option></option>
             </select>
-            <input type="button" value="Change CPU Allocation" onclick="applyCoreChange();"/>
+            <input type="button" value="Change CPU Allocation" onclick="applyCoreChange(this);"/>
         </form>
         <div id="singleMachineNotice" class="leftIndent"></div>
     </div>

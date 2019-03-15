@@ -54,8 +54,7 @@ sudo su - $WALDORF_USER -c "cd $PYTHON_SOURCE_DIR && "\
 "tar xf Python-${PYTHON_VERSION}.tgz"
 
 sudo su - $WALDORF_USER -c "cd $PYTHON_BUILD_DIR && "\
-"./configure --enable-optimizations"\
-"--prefix=$PYTHON_INSTALL_DIR"
+"./configure --enable-optimizations --prefix=$PYTHON_INSTALL_DIR"
 
 sudo su - $WALDORF_USER -c "cd $PYTHON_BUILD_DIR && "\
 "make"
