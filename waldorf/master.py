@@ -354,10 +354,12 @@ class ClientNamespace(socketio.AsyncNamespace):
     async def update_client_cores(self, room):
         if self.client_num == 0:
             return
+        self._cores = int(self.up.slave_ns.available_cores * 1.05) \
+                      // self.client_num
+        self.up.logger.info('update client cores. '
+                            'cores: {} room: {}'.format(self._cores, room))
         await self.emit(
-            _WaldorfAPI.GET_CORES + '_resp',
-            int(self.up.slave_ns.available_cores * 1.05) // self.client_num,
-            room=room)
+            _WaldorfAPI.GET_CORES + '_resp', self._cores, room=room)
 
     async def on_get_cores(self, sid):
         self.up.logger.debug('on_get_cores')

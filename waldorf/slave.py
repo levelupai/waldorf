@@ -441,8 +441,9 @@ class Namespace(SocketIONamespace):
     def terminate_worker(self, uid):
         try:
             self.info[uid]['event'].set()
-            time.sleep(0.5)
+            time.sleep(2)
             self.info[uid]['worker'].terminate()
+            time.sleep(2)
         except:
             self.log('terminate worker error. exception: {}'.format(
                 traceback.format_exc()), get_frame())
