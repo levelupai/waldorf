@@ -16,6 +16,7 @@ import os
 from socketIO_client import SocketIO, SocketIONamespace
 from celery.app.control import Control
 from celery import Celery
+import redis
 
 from waldorf.util import DummyLogger, get_frame, init_logger, get_path, \
     get_timestamp, ColoredFormatter, get_system_info, obj_encode, get_local_ip
@@ -300,11 +301,14 @@ class Namespace(SocketIONamespace):
         self.workers = {}
         self.w_prefetch_multi = 1
         self.busy = 0
+        self.worker_lock = threading.Lock()
         self.up.waldorf_info['ready'] = 'True'
         self.emit(_WaldorfAPI.GET_INFO + '_resp',
                   obj_encode(self.up.waldorf_info))
         self.time = time.time()
         self.current_client = []
+        self._redis_client = redis.StrictRedis(
+            host=self.up.cfg.broker_ip, port=self.up.cfg.redis_port)
         threading.Thread(target=self.update, daemon=True).start()
 
     def update(self):
@@ -346,20 +350,24 @@ class Namespace(SocketIONamespace):
                 self.up.waldorf_info['prefetch_multi'] = self.w_prefetch_multi
 
                 if self.up.waldorf_info['cfg_core'] > 0:
+                    self.worker_lock.acquire()
                     for uid in self.workers:
                         if 'worker' in self.info[uid]:
                             self.terminate_worker(uid)
+                    self.worker_lock.release()
 
                     self.log('terminated and wait for 1 seconds',
                              get_frame())
                     time.sleep(1)
 
                     # Restart workers one by one.
+                    self.worker_lock.acquire()
                     for uid in self.workers:
                         args = self.workers[uid]
                         args = copy.deepcopy(args)
                         args.extend([self.w_prefetch_multi, self.up.cfg])
                         self.setup_worker(args)
+                    self.worker_lock.release()
 
                 self.busy -= 1
                 self.up.waldorf_info['ready'] = 'True' \
@@ -420,6 +428,7 @@ class Namespace(SocketIONamespace):
         """Set up Celery worker."""
         uid, py_path, env_path, tasks, prefetch_multiplier, cfg = args
         app_name = 'app-' + uid
+        self.info[uid]['app_name'] = app_name
         worker_name = app_name.replace('-', '_') + \
                       '@{}'.format(socket.gethostname())
         self.log('setup worker for uid: {}'.format(uid), get_frame())
@@ -444,6 +453,7 @@ class Namespace(SocketIONamespace):
             time.sleep(2)
             self.info[uid]['worker'].terminate()
             time.sleep(2)
+            self._redis_client.expire(self.info[uid]['app_name'], 60)
         except:
             self.log('terminate worker error. exception: {}'.format(
                 traceback.format_exc()), get_frame())
@@ -458,7 +468,9 @@ class Namespace(SocketIONamespace):
         args = [uid, self.envs[uid].get_py_path(),
                 self.envs[uid].get_env_path(),
                 self.get_info_dict(uid)['tasks']]
+        self.worker_lock.acquire()
         self.workers[uid] = args
+        self.worker_lock.release()
         args = copy.deepcopy(args)
         args.extend([self.w_prefetch_multi, self.up.cfg])
         if self.up.waldorf_info['cfg_core'] != 0:
@@ -492,7 +504,9 @@ class Namespace(SocketIONamespace):
                          get_frame())
                 self.terminate_worker(uid)
             self.info.pop(uid, None)
+            self.worker_lock.acquire()
             self.workers.pop(uid, None)
+            self.worker_lock.release()
 
         self.log('current running client(s):', get_frame())
         for client_uid in self.current_client:
@@ -518,8 +532,10 @@ class Namespace(SocketIONamespace):
                         self.log('removing client uid: {}'.format(uid),
                                  get_frame())
                         self.current_client.remove(uid)
+                    self.worker_lock.acquire()
                     self.terminate_worker(uid)
                     self.workers.pop(uid, None)
+                    self.worker_lock.release()
 
             # Set up affinity.
             self.up.cfg.core = core
@@ -529,19 +545,23 @@ class Namespace(SocketIONamespace):
             self.log('changed core to {}'.format(core), get_frame())
 
             # Stop workers.
+            self.worker_lock.acquire()
             for uid in self.workers:
                 self.terminate_worker(uid)
+            self.worker_lock.release()
 
             self.log('terminated and wait for 1 seconds', get_frame())
             time.sleep(1)
 
             if core != 0:
                 # Restart workers one by one.
+                self.worker_lock.acquire()
                 for uid in self.workers:
                     args = self.workers[uid]
                     args = copy.deepcopy(args)
                     args.extend([self.w_prefetch_multi, self.up.cfg])
                     self.setup_worker(args)
+                self.worker_lock.release()
             save_cfg('slave', self.up.cfg)
             self.emit(_WaldorfAPI.CHANGE_CORE + '_resp', (0, 'Success'))
             self.log('Success', get_frame())
@@ -580,8 +600,10 @@ class Namespace(SocketIONamespace):
                     self.log('removing client uid: {}'.format(uid),
                              get_frame())
                     self.current_client.remove(uid)
+                self.worker_lock.acquire()
                 self.terminate_worker(uid)
                 self.workers.pop(uid, None)
+                self.worker_lock.release()
 
         # Restarting local client tasks
         for uid, arg in args.items():
