@@ -351,19 +351,23 @@ class ClientNamespace(socketio.AsyncNamespace):
         await self.emit(_WaldorfAPI.CHECK_VER + '_resp',
                         waldorf.__version__, room=sid)
 
-    async def update_client_cores(self, room):
+    async def update_client_cores(self, room, uid=''):
         if self.client_num == 0:
             return
         self._cores = int(self.up.slave_ns.available_cores * 1.1) \
                       // self.client_num
-        self.up.logger.info('update client cores. '
-                            'cores: {} room: {}'.format(self._cores, room))
+        if uid == '':
+            self.up.logger.info('update client cores. '
+                                'cores: {} room: {}'.format(self._cores, room))
+        else:
+            self.up.logger.info('update client cores. '
+                                'cores: {} uid: {}'.format(self._cores, uid))
         await self.emit(
             _WaldorfAPI.GET_CORES + '_resp', self._cores, room=room)
 
     async def on_get_cores(self, sid):
         self.up.logger.debug('on_get_cores')
-        await self.update_client_cores(sid)
+        await self.update_client_cores(sid, self.info['sid'][sid]['uid'])
 
     async def on_disconnect(self, sid):
         """Client disconnect.
