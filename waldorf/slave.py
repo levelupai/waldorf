@@ -163,8 +163,8 @@ class CheckCPUThread(threading.Thread):
             self.deque.append(average)
             self.up.waldorf_info['load_per'] = '{:.1f}%'.format(average)
             self.up.waldorf_info['load_total'] = '{:.1f}%'.format(total)
-            self.up.waldorf_info['load_total_5'] = sum(self.deque) / \
-                                                   len(self.deque)
+            self.up.waldorf_info['load_per_5'] = sum(self.deque) / \
+                                                 len(self.deque)
 
 
 class _WaldorfSio(mp.Process):
@@ -331,7 +331,7 @@ class Namespace(SocketIONamespace):
         if len(self.workers.keys()) != 0 and time.time() - self.time > 300:
             flag = False
             if self.up.waldorf_info['cfg_core'] * 0.95 <= \
-                    self.up.waldorf_info['load_total_5'] and \
+                    self.up.waldorf_info['load_per_5'] and \
                     self.w_prefetch_multi > 1:
                 self.up.logger_output('info',
                                       'w_prefetch_multi argument: {} -> {}'
@@ -341,7 +341,7 @@ class Namespace(SocketIONamespace):
                 self.w_prefetch_multi -= 1
                 flag = True
             if self.up.waldorf_info['cfg_core'] * 0.7 > \
-                    self.up.waldorf_info['load_total_5'] and \
+                    self.up.waldorf_info['load_per_5'] and \
                     self.w_prefetch_multi < 6:
                 self.up.logger_output('info',
                                       'w_prefetch_multi argument: {} -> {}'

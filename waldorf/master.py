@@ -74,13 +74,13 @@ class _WaldorfWebApp(mp.Process):
         self.mg.add_element(md_util.Head(2, 'Table of Connections'))
         self.client_table = md_util.Table()
         self.client_table.set_head(
-            ['Hostname', 'Type', 'State', 'ConnectTime', 'DisconnectTime',
-             'UID', 'Version', 'IP', 'CPU', 'Ready', 'Memory', 'OS'])
+            ['Hostname', 'Type', 'State', 'ConnTime', 'DisconnTime',
+             'UID', 'Version', 'IP', 'CPU', 'Memory', 'OS'])
         self.slave_table = md_util.Table()
         self.slave_table.set_head(
-            ['Hostname', 'Type', 'State', 'ConnectTime', 'DisconnectTime',
+            ['Hostname', 'Type', 'State', 'ConnTime', 'DisconnTime',
              'UID', 'Version', 'IP', 'CPU', 'Ready', 'CORES', 'USED',
-             'LOAD(%)', 'LOAD_TOTAL(%)', 'LOAD(1)', 'LOAD(5)', 'LOAD(15)',
+             'LOAD(%)', 'TOTAL(%)', 'LOAD(1)', 'LOAD(5)', 'LOAD(15)',
              'P', 'Memory', 'OS'])
         self.mg.add_element(self.client_table)
         self.mg.add_element(self.slave_table)
@@ -352,8 +352,8 @@ class ClientNamespace(socketio.AsyncNamespace):
             'Hostname': hostname,
             'Type': 'Client',
             'State': 'Online',
-            'ConnectTime': self.info['uid'][uid]['connect_time_readable'],
-            'DisconnectTime': ' ',
+            'ConnTime': self.info['uid'][uid]['connect_time_readable'],
+            'DisconnTime': ' ',
             'UID': uid,
             'Version': version,
             'IP': info['ip'],
@@ -566,7 +566,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
         _info = {
             'Ready': 'True',
             'LOAD(%)': info['load_per'],
-            'LOAD_TOTAL(%)': info['load_total'],
+            'TOTAL(%)': info['load_total'],
             'LOAD(1)': info['load_avg_1'],
             'LOAD(5)': info['load_avg_5'],
             'LOAD(15)': info['load_avg_15'],
@@ -617,8 +617,8 @@ class SlaveNamespace(socketio.AsyncNamespace):
             'Hostname': hostname,
             'Type': 'Slave',
             'State': 'Online',
-            'ConnectTime': self.info['uid'][uid]['connect_time_readable'],
-            'DisconnectTime': ' ',
+            'ConnTime': self.info['uid'][uid]['connect_time_readable'],
+            'DisconnTime': ' ',
             'UID': uid,
             'Version': version,
             'IP': info['ip'],
@@ -627,7 +627,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
             'CORES': info['cpu_count'],
             'USED_CORES': info['cfg_core'],
             'LOAD(%)': info['load_per'],
-            'LOAD_TOTAL(%)': info['load_total'],
+            'TOTAL(%)': info['load_total'],
             'LOAD(1)': info['load_avg_1'],
             'LOAD(5)': info['load_avg_5'],
             'LOAD(15)': info['load_avg_15'],
@@ -671,7 +671,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
         self.info['uid'][uid]['disconnect_time'] = time.time()
         self.info['uid'][uid]['disconnect_time_readable'] = \
             datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        self.properties[uid]['DisconnectTime'] = \
+        self.properties[uid]['DisconnTime'] = \
             self.info['uid'][uid]['disconnect_time_readable']
         if uid in self.exit_dict:
             self.up.logger.debug('slave {} disconnect, uid: {}.'.format(
