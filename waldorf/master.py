@@ -1,29 +1,32 @@
-from aiohttp import web
-import socketio
 import multiprocessing as mp
-import time
-import waldorf
-from waldorf import _WaldorfAPI
-from waldorf.util import DummyLogger, init_logger, \
-    get_path, ColoredFormatter, obj_decode, obj_encode
-import logging
+from pathlib import Path
 import logging.handlers
-from waldorf.cfg import WaldorfCfg, load_cfg, save_cfg
 import argparse
+import datetime
 import asyncio
-from Crypto import Random
-from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_v1_5
-import Crypto.Util.number
-import os
+import logging
 import base64
 import pickle
-import waldorf.md_util as md_util
-from pathlib import Path
-import datetime
+import time
 import json
 import sys
+import os
 
+from aiohttp import web
+import socketio
+import redis
+
+from Crypto.Cipher import PKCS1_v1_5
+from Crypto.PublicKey import RSA
+from Crypto import Random
+import Crypto.Util.number
+
+from waldorf.util import DummyLogger, init_logger, \
+    get_path, ColoredFormatter, obj_decode, obj_encode
+from waldorf.cfg import WaldorfCfg, load_cfg, save_cfg
+import waldorf.md_util as md_util
+from waldorf import _WaldorfAPI
+import waldorf
 
 class _WaldorfWebApp(mp.Process):
     def __init__(self, cfg: WaldorfCfg, cmd_queue):
@@ -59,21 +62,28 @@ class _WaldorfWebApp(mp.Process):
         self.info = {}
         self.events = {}
         self.setup_rsa()
+        self.setup_table()
 
-        # index is using js now, so this part is deprecated.
+        # info for restart slave task
+        self.registered_info = {}
+
+    def setup_table(self):
         self.mg = md_util.MarkdownGenerator()
         self.mg.add_element(md_util.Head(1, 'Waldorf Master Server'))
         self.mg.add_element(md_util.Text(''))
         self.mg.add_element(md_util.Head(2, 'Table of Connections'))
-        self.md_table = md_util.Table()
-        self.md_table.set_head(
+        self.client_table = md_util.Table()
+        self.client_table.set_head(
             ['Hostname', 'Type', 'State', 'ConnectTime', 'DisconnectTime',
-             'UID', 'Version', 'IP', 'CPU', 'Ready', 'CORES', 'USED', 'LOAD(%)',
-             'LOAD(1)', 'LOAD(5)', 'LOAD(15)', 'P', 'Memory', 'OS'])
-        self.mg.add_element(self.md_table)
-
-        # info for restart slave task
-        self.registered_info = {}
+             'UID', 'Version', 'IP', 'CPU', 'Ready', 'Memory', 'OS'])
+        self.slave_table = md_util.Table()
+        self.slave_table.set_head(
+            ['Hostname', 'Type', 'State', 'ConnectTime', 'DisconnectTime',
+             'UID', 'Version', 'IP', 'CPU', 'Ready', 'CORES', 'USED',
+             'LOAD(%)', 'LOAD_TOTAL(%)', 'LOAD(1)', 'LOAD(5)', 'LOAD(15)',
+             'P', 'Memory', 'OS'])
+        self.mg.add_element(self.client_table)
+        self.mg.add_element(self.slave_table)
 
     def register_task(self, uid, env=None, task=None, sid=None):
         if env:
@@ -178,7 +188,16 @@ class AdminNamespace(socketio.AsyncNamespace):
 
         Get information of Waldorf slaves and clients.
         """
-        resp = self.up.md_table.to_dict()
+        _c_table = self.up.client_table.to_dict()
+        _s_table = self.up.slave_table.to_dict()
+        objects = {}
+        objects.update(_c_table['objects'])
+        objects.update(_s_table['objects'])
+        resp = {
+            'c_head': _c_table['head'],
+            's_head': _s_table['head'],
+            'objects': objects
+        }
         await self.emit(_WaldorfAPI.GET_INFO + '_resp',
                         resp, room=sid)
 
@@ -188,7 +207,8 @@ class AdminNamespace(socketio.AsyncNamespace):
         Change the used cores of the given uid.
         """
         uid, core = args
-        self.up.logger.info('on_change_core {} {}'.format(uid, core))
+        hostname = self.up.slave_ns.info['uid'][uid]['hostname']
+        self.up.logger.info('on_change_core {} {}'.format(hostname, core))
         if uid in self.up.slave_ns.info['uid']:
             _slave_sid = self.up.slave_ns.info['uid'][uid]['sid']
             self.info['change_core'][uid] = core
@@ -241,6 +261,8 @@ class ClientNamespace(socketio.AsyncNamespace):
         self.exit_dict = {}
         self.properties = {}
         self.client_num = 0
+        self._redis_client = redis.StrictRedis(
+            host=self.up.cfg.broker_ip, port=self.up.cfg.redis_port)
         asyncio.ensure_future(self.update())
 
     async def update(self):
@@ -257,6 +279,8 @@ class ClientNamespace(socketio.AsyncNamespace):
             if 'disconnect_time' in self.info['uid'][k] and now - \
                     self.info['uid'][k]['disconnect_time'] > self.lost_timeout:
                 await self.clean_up(k)
+            app_name = 'app-' + k
+            self._redis_client.expire(app_name, 120)
         asyncio.ensure_future(self.update())
 
     async def clean_up(self, uid):
@@ -271,12 +295,18 @@ class ClientNamespace(socketio.AsyncNamespace):
         self.up.registered_info.pop(uid)
         await self.up.slave_ns.emit(_WaldorfAPI.CLEAN_UP,
                                     uid, room='slave')
+        self.leave_room(self.info['uid'][uid]['sid'], 'client')
+        self.client_num -= 1
+        await self.update_client_cores('client')
 
     async def on_clean_up(self, sid, uid):
         """Receive client's clean up request."""
         self.up.logger.debug('on_clean_up')
         await self.up.slave_ns.emit(_WaldorfAPI.CLEAN_UP,
                                     uid, room='slave')
+        self.leave_room(sid, 'client')
+        self.client_num -= 1
+        await self.update_client_cores('client')
 
     async def on_connect(self, sid, environ):
         """Client connect.
@@ -328,19 +358,12 @@ class ClientNamespace(socketio.AsyncNamespace):
             'Version': version,
             'IP': info['ip'],
             'CPU': info['cpu_type'],
-            'Ready': ' ',
             'CORES': info['cpu_count'],
-            'USED_CORES': ' ',
-            'LOAD(%)': ' ',
-            'LOAD(1)': ' ',
-            'LOAD(5)': ' ',
-            'LOAD(15)': ' ',
-            'P': ' ',
             'Memory': info['mem'],
             'OS': info['os']
         }
         # Use _c to denote client
-        self.up.md_table.update_object(uid + '_c', self.properties[uid])
+        self.up.client_table.update_object(uid + '_c', self.properties[uid])
 
     async def on_check_ver(self, sid, version):
         """Receive client's check version request."""
@@ -376,7 +399,7 @@ class ClientNamespace(socketio.AsyncNamespace):
         """
         self.up.logger.debug('on_disconnect')
         uid = self.info['sid'][sid]['uid']
-        self.up.md_table.remove_object(uid + '_c')
+        self.up.client_table.remove_object(uid + '_c')
         self.properties.pop(uid, None)
         self.info['sid'].pop(sid, None)
         if uid in self.info['uid']:
@@ -393,9 +416,6 @@ class ClientNamespace(socketio.AsyncNamespace):
                 self.up.logger.debug('client {} disconnect abnormally, uid: {}.'
                                      .format(self.info['uid'][uid]['hostname'],
                                              uid))
-        self.leave_room(sid, 'client')
-        self.client_num -= 1
-        await self.update_client_cores('client')
         self.connections.pop(uid, None)
 
     def on_exit(self, sid, uid):
@@ -528,33 +548,32 @@ class SlaveNamespace(socketio.AsyncNamespace):
                     'Connection lost over {} sec. Slave uid: {} is removed'.
                         format(self.lost_timeout, k))
                 self.info['uid'].pop(k)
-        args = ['load_per', 'load_avg1', 'load_avg5', 'load_avg15',
+        args = ['load_per', 'load_total',
+                'load_avg_1', 'load_avg_5', 'load_avg_15',
                 'prefetch_multi', 'ready']
         await self.emit(_WaldorfAPI.UPDATE_TABLE, args, room='slave')
         asyncio.ensure_future(self.update())
 
-    async def on_update_table_resp(self, sid, args):
+    async def on_update_table_resp(self, sid, info):
         """API for updating table
 
         Update value of certain column
         args: k: column name, v: new column value
         """
-        if sid in self.info['sid'] and 'uid' in self.info['sid'][sid]:
-            uid = self.info['sid'][sid]['uid']
-            for k, v in args.items():
-                if k == 'load_per':
-                    self.properties[uid]['LOAD(%)'] = v
-                if k == 'load_avg1':
-                    self.properties[uid]['LOAD(1)'] = v
-                if k == 'load_avg5':
-                    self.properties[uid]['LOAD(5)'] = v
-                if k == 'load_avg15':
-                    self.properties[uid]['LOAD(15)'] = v
-                if k == 'prefetch_multi':
-                    self.properties[uid]['P'] = v
-                if k == 'ready':
-                    self.properties[uid]['Ready'] = v
-            self.up.md_table.update_object(uid + '_s', self.properties[uid])
+        if not (sid in self.info['sid'] and 'uid' in self.info['sid'][sid]):
+            return
+        uid = self.info['sid'][sid]['uid']
+        _info = {
+            'Ready': 'True',
+            'LOAD(%)': info['load_per'],
+            'LOAD_TOTAL(%)': info['load_total'],
+            'LOAD(1)': info['load_avg_1'],
+            'LOAD(5)': info['load_avg_5'],
+            'LOAD(15)': info['load_avg_15'],
+            'P': info['prefetch_multi'],
+        }
+        self.properties[uid].update(_info)
+        self.up.slave_table.update_object(uid + '_s', self.properties[uid])
 
     async def on_connect(self, sid, environ):
         """Slave connect.
@@ -607,16 +626,17 @@ class SlaveNamespace(socketio.AsyncNamespace):
             'Ready': 'True',
             'CORES': info['cpu_count'],
             'USED_CORES': info['cfg_core'],
-            'LOAD(%)': ' ',
-            'LOAD(1)': ' ',
-            'LOAD(5)': ' ',
-            'LOAD(15)': ' ',
+            'LOAD(%)': info['load_per'],
+            'LOAD_TOTAL(%)': info['load_total'],
+            'LOAD(1)': info['load_avg_1'],
+            'LOAD(5)': info['load_avg_5'],
+            'LOAD(15)': info['load_avg_15'],
             'P': info['prefetch_multi'],
             'Memory': info['mem'],
             'OS': info['os']
         }
         # Update table
-        self.up.md_table.update_object(uid + '_s', self.properties[uid])
+        self.up.slave_table.update_object(uid + '_s', self.properties[uid])
         # Update available cores
         await self.update_available_cores(self.properties[uid]['USED_CORES'])
 
@@ -664,7 +684,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
                                          uid))
             self.properties[uid]['State'] = 'Offline(Abnormally)'
         # Update table
-        self.up.md_table.update_object(uid + '_s', self.properties[uid])
+        self.up.slave_table.update_object(uid + '_s', self.properties[uid])
         # Update available cores
         await self.update_available_cores(-self.properties[uid]['USED_CORES'])
         self.leave_room(sid, 'slave')
@@ -726,7 +746,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
             self.properties[uid]['USED_CORES'] = \
                 self.up.admin_ns.info['change_core'][uid]
             # Update table
-            self.up.md_table.update_object(uid + '_s', self.properties[uid])
+            self.up.slave_table.update_object(uid + '_s', self.properties[uid])
             # Update available cores
             await self.update_available_cores(
                 self.properties[uid]['USED_CORES'] - old)

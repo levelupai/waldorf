@@ -653,13 +653,13 @@ $(document).ready(function() {
         onlineClients.length + ')';
 
     if (clients.length > 0) {
-      createTableFromJson(msg.head, clients, 'clients');
+      createTableFromJson(msg.c_head, clients, 'clients');
     } else {
       document.getElementById('clientsDiv').innerHTML =
           'There are no clients currently connected';
     }
     if (slaves.length > 0) {
-      createTableFromJson(msg.head, slaves, 'slaves');
+      createTableFromJson(msg.s_head, slaves, 'slaves');
     } else {
       document.getElementById('slavesDiv').innerHTML =
           'There are no slaves connected';

@@ -137,7 +137,7 @@ class CeleryResultThread(threading.Thread):
         self.up.info['tasks'][task_uid]['retry_times'] += 1
         # Enable retry flag when any task already retried more than expected
         if self.up.info['tasks'][task_uid]['retry_times'] >= \
-                self.cfg.retry_times - 1 and \
+                self.cfg.retry_times // 2 and \
                 task_uid not in self.retrying_task:
             self.retrying_task.append(task_uid)
             self.up.retry_flag = True
@@ -213,20 +213,17 @@ class _WaldorfSio(mp.Process):
         self.retry_flag = False
 
         # Collect information.
-        self.waldorf_info = {'uid': self.uid,
-                             'hostname': socket.gethostname(),
-                             'ver': waldorf.__version__,
-                             'ip': get_local_ip(),
-                             'os': self.system_info.os,
-                             'cpu_type': self.system_info.cpu_type,
-                             'cpu_count': self.system_info.cpu_count,
-                             'cfg_core': self.cfg.core,
-                             'mem': self.system_info.mem,
-                             'load_avg1': ' ',
-                             'load_avg5': ' ',
-                             'load_avg15': ' ',
-                             'prefetch_multi': ' ',
-                             'ready': ' '}
+        self.waldorf_info = {
+            'uid': self.uid,
+            'hostname': socket.gethostname(),
+            'ver': waldorf.__version__,
+            'ip': get_local_ip(),
+            'os': self.system_info.os,
+            'cpu_type': self.system_info.cpu_type,
+            'cpu_count': self.system_info.cpu_count,
+            'cfg_core': self.cfg.core,
+            'mem': self.system_info.mem,
+        }
 
         # Connect to Waldorf master.
         self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port)

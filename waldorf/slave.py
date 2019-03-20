@@ -1,3 +1,4 @@
+from collections import deque
 import multiprocessing as mp
 from pathlib import Path
 import threading
@@ -136,6 +137,8 @@ class CheckCPUThread(threading.Thread):
     def __init__(self, up):
         super(CheckCPUThread, self).__init__()
         self.up = up
+        self.cpu_count = mp.cpu_count()
+        self.deque = deque(maxlen=30)
         self.daemon = True
 
     def run(self):
@@ -143,17 +146,25 @@ class CheckCPUThread(threading.Thread):
             core = self.up.waldorf_info['cfg_core']
             if core == 0:
                 self.up.waldorf_info['load_per'] = '0.0%'
+                self.up.waldorf_info['load_total'] = '0.0%'
                 time.sleep(0.01)
                 continue
-            affinity = [i for i in range(mp.cpu_count())][-core:]
+            affinity = [i for i in range(self.cpu_count)][-core:]
             # Calculate prefetch argument.
             average = 0
+            total = 0
             for _ in range(10):
                 per = psutil.cpu_percent(interval=1, percpu=True)
                 aver = sum([per[i] for i in affinity]) / core
                 average += aver
+                total += sum(per) / self.cpu_count
             average /= 10
+            total /= 10
+            self.deque.append(average)
             self.up.waldorf_info['load_per'] = '{:.1f}%'.format(average)
+            self.up.waldorf_info['load_total'] = '{:.1f}%'.format(total)
+            self.up.waldorf_info['load_total_5'] = sum(self.deque) / \
+                                                   len(self.deque)
 
 
 class _WaldorfSio(mp.Process):
@@ -178,10 +189,11 @@ class _WaldorfSio(mp.Process):
                              'cfg_core': self.cfg.core,
                              'mem': self.system_info.mem,
                              'load_per': '0.0%',
-                             'load_avg1': ' ',
-                             'load_avg5': ' ',
-                             'load_avg15': ' ',
-                             'prefetch_multi': ' ',
+                             'load_total': '0.0%',
+                             'load_avg_1': '0.0',
+                             'load_avg_5': '0.0',
+                             'load_avg_15': '0.0',
+                             'prefetch_multi': '1',
                              'ready': ' '}
         self.update_load_avg()
         self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port)
@@ -195,9 +207,9 @@ class _WaldorfSio(mp.Process):
     def update_load_avg(self):
         load_avg = list(os.getloadavg())
         load_avg = [str(round(i, 1)) for i in load_avg]
-        self.waldorf_info['load_avg1'] = load_avg[0]
-        self.waldorf_info['load_avg5'] = load_avg[1]
-        self.waldorf_info['load_avg15'] = load_avg[2]
+        self.waldorf_info['load_avg_1'] = load_avg[0]
+        self.waldorf_info['load_avg_5'] = load_avg[1]
+        self.waldorf_info['load_avg_15'] = load_avg[2]
 
     def setup_logger(self):
         if self.cfg.debug >= 1:
@@ -307,8 +319,6 @@ class Namespace(SocketIONamespace):
                   obj_encode(self.up.waldorf_info))
         self.time = time.time()
         self.current_client = []
-        self._redis_client = redis.StrictRedis(
-            host=self.up.cfg.broker_ip, port=self.up.cfg.redis_port)
         threading.Thread(target=self.update, daemon=True).start()
 
     def update(self):
@@ -318,10 +328,10 @@ class Namespace(SocketIONamespace):
             self.time = time.time()
             self.w_prefetch_multi = 1
             self.up.waldorf_info['prefetch_multi'] = self.w_prefetch_multi
-        if len(self.workers.keys()) != 0 and time.time() - self.time > 600:
+        if len(self.workers.keys()) != 0 and time.time() - self.time > 300:
             flag = False
             if self.up.waldorf_info['cfg_core'] * 0.95 <= \
-                    float(self.up.waldorf_info['load_avg5']) and \
+                    self.up.waldorf_info['load_total_5'] and \
                     self.w_prefetch_multi > 1:
                 self.up.logger_output('info',
                                       'w_prefetch_multi argument: {} -> {}'
@@ -331,7 +341,7 @@ class Namespace(SocketIONamespace):
                 self.w_prefetch_multi -= 1
                 flag = True
             if self.up.waldorf_info['cfg_core'] * 0.7 > \
-                    float(self.up.waldorf_info['load_avg5']) and \
+                    self.up.waldorf_info['load_total_5'] and \
                     self.w_prefetch_multi < 6:
                 self.up.logger_output('info',
                                       'w_prefetch_multi argument: {} -> {}'
@@ -453,7 +463,6 @@ class Namespace(SocketIONamespace):
             time.sleep(2)
             self.info[uid]['worker'].terminate()
             time.sleep(2)
-            self._redis_client.expire(self.info[uid]['app_name'], 60)
         except:
             self.log('terminate worker error. exception: {}'.format(
                 traceback.format_exc()), get_frame())
