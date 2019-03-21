@@ -261,6 +261,7 @@ class ClientNamespace(socketio.AsyncNamespace):
         self.connections = {}
         self.exit_dict = {}
         self.properties = {}
+        self.app_name_dict = {}
         self.client_num = 0
         self._redis_client = redis.StrictRedis(
             host=self.up.cfg.broker_ip, port=self.up.cfg.redis_port)
@@ -280,8 +281,16 @@ class ClientNamespace(socketio.AsyncNamespace):
             if 'disconnect_time' in self.info['uid'][k] and now - \
                     self.info['uid'][k]['disconnect_time'] > self.lost_timeout:
                 await self.clean_up(k)
-            app_name = 'app-' + k
+
+        # Clean celery app queue
+        _clean_queue = []
+        for k, v in self.app_name_dict.items():
+            if time.time() - v >= 60:
+                _clean_queue.append(k)
+        for app_name in _clean_queue:
             self._redis_client.expire(app_name, 120)
+            self.app_name_dict.pop(app_name)
+
         asyncio.ensure_future(self.update())
 
     async def clean_up(self, uid):
@@ -295,11 +304,16 @@ class ClientNamespace(socketio.AsyncNamespace):
         self.up.logger.debug('on clean up, registered client uid: {}'.format(
             list(self.up.registered_info.keys())))
         self.up.registered_info.pop(uid)
-        await self.up.slave_ns.emit(_WaldorfAPI.CLEAN_UP,
-                                    uid, room='slave')
+        await self.up.slave_ns.emit(_WaldorfAPI.CLEAN_UP, uid, room='slave')
         self.leave_room(sid, 'client')
+
+        # Update client cores
         self.client_num -= 1
         await self.update_client_cores('client')
+
+        # Clean celery app queue
+        app_name = 'app-' + uid
+        self.app_name_dict[app_name] = time.time()
 
     async def on_clean_up(self, sid, uid):
         """Receive client's clean up request."""
@@ -307,8 +321,14 @@ class ClientNamespace(socketio.AsyncNamespace):
         await self.up.slave_ns.emit(_WaldorfAPI.CLEAN_UP,
                                     uid, room='slave')
         self.leave_room(sid, 'client')
+
+        # Update client cores
         self.client_num -= 1
         await self.update_client_cores('client')
+
+        # Clean celery app queue
+        app_name = 'app-' + uid
+        self.app_name_dict[app_name] = time.time()
 
     async def on_connect(self, sid, environ):
         """Client connect.
@@ -378,8 +398,8 @@ class ClientNamespace(socketio.AsyncNamespace):
     async def update_client_cores(self, room, uid=''):
         if self.client_num == 0:
             return
-        self._cores = int(self.up.slave_ns.available_cores * 1.1) \
-                      // self.client_num
+        self._cores = int(self.up.slave_ns.available_cores /
+                          self.client_num * 1.1)
         if uid == '':
             self.up.logger.info('update client cores. '
                                 'cores: {} room: {}'.format(self._cores, room))
