@@ -17,7 +17,6 @@ import os
 from socketIO_client import SocketIO, SocketIONamespace
 from celery.app.control import Control
 from celery import Celery
-import redis
 
 from waldorf.util import DummyLogger, get_frame, init_logger, get_path, \
     get_timestamp, ColoredFormatter, get_system_info, obj_encode, get_local_ip
@@ -147,6 +146,7 @@ class CheckCPUThread(threading.Thread):
             if core == 0:
                 self.up.waldorf_info['load_per'] = '0.0%'
                 self.up.waldorf_info['load_total'] = '0.0%'
+                self.up.waldorf_info['load_per_5'] = 0.0
                 time.sleep(0.01)
                 continue
             affinity = [i for i in range(self.cpu_count)][-core:]
@@ -179,22 +179,24 @@ class _WaldorfSio(mp.Process):
         self.uid = str(uuid.uuid4())
         self.setup_logger()
         self.system_info = get_system_info()
-        self.waldorf_info = {'uid': self.uid,
-                             'hostname': socket.gethostname(),
-                             'ver': waldorf.__version__,
-                             'ip': get_local_ip(),
-                             'os': self.system_info.os,
-                             'cpu_type': self.system_info.cpu_type,
-                             'cpu_count': self.system_info.cpu_count,
-                             'cfg_core': self.cfg.core,
-                             'mem': self.system_info.mem,
-                             'load_per': '0.0%',
-                             'load_total': '0.0%',
-                             'load_avg_1': '0.0',
-                             'load_avg_5': '0.0',
-                             'load_avg_15': '0.0',
-                             'prefetch_multi': '1',
-                             'ready': ' '}
+        self.waldorf_info = {
+            'uid': self.uid,
+            'hostname': socket.gethostname(),
+            'ver': waldorf.__version__,
+            'ip': get_local_ip(),
+            'os': self.system_info.os,
+            'cpu_type': self.system_info.cpu_type,
+            'cpu_count': self.system_info.cpu_count,
+            'cfg_core': self.cfg.core,
+            'mem': self.system_info.mem,
+            'load_per': '0.0%',
+            'load_total': '0.0%',
+            'load_avg_1': '0.0',
+            'load_avg_5': '0.0',
+            'load_avg_15': '0.0',
+            'prefetch_multi': '1',
+            'ready': ' '
+        }
         self.update_load_avg()
         self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port)
         self.logger.debug('Connect to {}:{} with uid {}'.format(
@@ -324,15 +326,16 @@ class Namespace(SocketIONamespace):
     def update(self):
         time.sleep(10)
 
-        if len(self.workers.keys()) == 0 and self.busy == 0:
+        if (len(self.workers.keys()) == 0 or self.up.cfg.core == 0) \
+                and self.busy == 0:
             self.time = time.time()
             self.w_prefetch_multi = 1
             self.up.waldorf_info['prefetch_multi'] = self.w_prefetch_multi
-        if len(self.workers.keys()) != 0 and time.time() - self.time > 300:
+        elif len(self.workers.keys()) != 0 and self.up.cfg.core != 0 \
+                and time.time() - self.time > 300:
             flag = False
-            if self.up.waldorf_info['cfg_core'] * 0.95 <= \
-                    self.up.waldorf_info['load_per_5'] and \
-                    self.w_prefetch_multi > 1:
+            if self.up.cfg.core * 0.95 <= self.up.waldorf_info['load_per_5'] \
+                    and self.w_prefetch_multi > 1:
                 self.up.logger_output('info',
                                       'w_prefetch_multi argument: {} -> {}'
                                       .format(self.w_prefetch_multi,
@@ -340,9 +343,8 @@ class Namespace(SocketIONamespace):
                                       get_frame())
                 self.w_prefetch_multi -= 1
                 flag = True
-            if self.up.waldorf_info['cfg_core'] * 0.7 > \
-                    self.up.waldorf_info['load_per_5'] and \
-                    self.w_prefetch_multi < 6:
+            if self.up.cfg.core * 0.7 > self.up.waldorf_info['load_per_5'] \
+                    and self.w_prefetch_multi < 6:
                 self.up.logger_output('info',
                                       'w_prefetch_multi argument: {} -> {}'
                                       .format(self.w_prefetch_multi,
@@ -359,7 +361,7 @@ class Namespace(SocketIONamespace):
                 self.time = time.time()
                 self.up.waldorf_info['prefetch_multi'] = self.w_prefetch_multi
 
-                if self.up.waldorf_info['cfg_core'] > 0:
+                if self.up.cfg.core > 0:
                     self.worker_lock.acquire()
                     for uid in self.workers:
                         if 'worker' in self.info[uid]:

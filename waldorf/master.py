@@ -28,6 +28,7 @@ import waldorf.md_util as md_util
 from waldorf import _WaldorfAPI
 import waldorf
 
+
 class _WaldorfWebApp(mp.Process):
     def __init__(self, cfg: WaldorfCfg, cmd_queue):
         super(_WaldorfWebApp, self).__init__()
@@ -358,7 +359,6 @@ class ClientNamespace(socketio.AsyncNamespace):
             'Version': version,
             'IP': info['ip'],
             'CPU': info['cpu_type'],
-            'CORES': info['cpu_count'],
             'Memory': info['mem'],
             'OS': info['os']
         }
