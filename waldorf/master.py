@@ -290,13 +290,14 @@ class ClientNamespace(socketio.AsyncNamespace):
         self.up.logger.debug(
             'Connection lost over {} sec. Client uid: {} is removed'.format(
                 self.lost_timeout, uid))
+        sid = self.info['uid'][uid]['sid']
         self.info['uid'].pop(uid)
         self.up.logger.debug('on clean up, registered client uid: {}'.format(
             list(self.up.registered_info.keys())))
         self.up.registered_info.pop(uid)
         await self.up.slave_ns.emit(_WaldorfAPI.CLEAN_UP,
                                     uid, room='slave')
-        self.leave_room(self.info['uid'][uid]['sid'], 'client')
+        self.leave_room(sid, 'client')
         self.client_num -= 1
         await self.update_client_cores('client')
 
