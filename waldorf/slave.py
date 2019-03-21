@@ -137,7 +137,7 @@ class CheckCPUThread(threading.Thread):
         super(CheckCPUThread, self).__init__()
         self.up = up
         self.cpu_count = mp.cpu_count()
-        self.deque = deque(maxlen=30)
+        self.deque = deque(maxlen=15)
         self.daemon = True
 
     def run(self):
@@ -331,10 +331,11 @@ class Namespace(SocketIONamespace):
             self.time = time.time()
             self.w_prefetch_multi = 1
             self.up.waldorf_info['prefetch_multi'] = self.w_prefetch_multi
-        elif len(self.workers.keys()) != 0 and self.up.cfg.core != 0 \
+
+        if len(self.workers.keys()) != 0 and self.up.cfg.core != 0 \
                 and time.time() - self.time > 300:
             flag = False
-            if self.up.cfg.core * 0.95 <= self.up.waldorf_info['load_per_5'] \
+            if self.up.waldorf_info['load_per_5'] >= 95 \
                     and self.w_prefetch_multi > 1:
                 self.up.logger_output('info',
                                       'w_prefetch_multi argument: {} -> {}'
@@ -343,7 +344,7 @@ class Namespace(SocketIONamespace):
                                       get_frame())
                 self.w_prefetch_multi -= 1
                 flag = True
-            if self.up.cfg.core * 0.7 > self.up.waldorf_info['load_per_5'] \
+            if self.up.waldorf_info['load_per_5'] < 70 \
                     and self.w_prefetch_multi < 6:
                 self.up.logger_output('info',
                                       'w_prefetch_multi argument: {} -> {}'

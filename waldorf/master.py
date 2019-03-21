@@ -290,6 +290,8 @@ class ClientNamespace(socketio.AsyncNamespace):
         for app_name in _clean_queue:
             self._redis_client.expire(app_name, 120)
             self.app_name_dict.pop(app_name)
+            self.up.logger.debug(
+                'clean up app queue. app_name: {}'.format(app_name))
 
         asyncio.ensure_future(self.update())
 
@@ -550,8 +552,10 @@ class SlaveNamespace(socketio.AsyncNamespace):
         asyncio.ensure_future(self.update())
 
     async def update_available_cores(self):
-        self.available_cores = sum(self.core_info.values())
-        await self.up.client_ns.update_client_cores('client')
+        _cores = sum(self.core_info.values())
+        if self.available_cores != _cores:
+            self.available_cores = _cores
+            await self.up.client_ns.update_client_cores('client')
 
     async def update(self):
         """Check connections every 5 seconds.
@@ -596,6 +600,7 @@ class SlaveNamespace(socketio.AsyncNamespace):
         }
         self.properties[uid].update(_info)
         self.up.slave_table.update_object(uid + '_s', self.properties[uid])
+        await self.update_available_cores()
 
     async def on_connect(self, sid, environ):
         """Slave connect.
