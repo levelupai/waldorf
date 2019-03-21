@@ -194,7 +194,7 @@ class _WaldorfSio(mp.Process):
             'load_avg_1': '0.0',
             'load_avg_5': '0.0',
             'load_avg_15': '0.0',
-            'prefetch_multi': '1',
+            'prefetch_multi': 1,
             'ready': ' '
         }
         self.update_load_avg()

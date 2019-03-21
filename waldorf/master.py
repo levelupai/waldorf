@@ -545,11 +545,12 @@ class SlaveNamespace(socketio.AsyncNamespace):
         self.connections = {}
         self.exit_dict = {}
         self.properties = {}
+        self.core_info = {}
         self.available_cores = 0
         asyncio.ensure_future(self.update())
 
-    async def update_available_cores(self, cores_diff):
-        self.available_cores += cores_diff
+    async def update_available_cores(self):
+        self.available_cores = sum(self.core_info.values())
         await self.up.client_ns.update_client_cores('client')
 
     async def update(self):
@@ -659,7 +660,9 @@ class SlaveNamespace(socketio.AsyncNamespace):
         # Update table
         self.up.slave_table.update_object(uid + '_s', self.properties[uid])
         # Update available cores
-        await self.update_available_cores(self.properties[uid]['USED_CORES'])
+        self.core_info[uid] = self.properties[uid]['USED_CORES'] * \
+                              self.properties[uid]['P']
+        await self.update_available_cores()
 
         # Send existing tasks to slave
         if len(self.up.registered_info) > 0:
@@ -706,8 +709,11 @@ class SlaveNamespace(socketio.AsyncNamespace):
             self.properties[uid]['State'] = 'Offline(Abnormally)'
         # Update table
         self.up.slave_table.update_object(uid + '_s', self.properties[uid])
+
         # Update available cores
-        await self.update_available_cores(-self.properties[uid]['USED_CORES'])
+        self.core_info.pop(uid)
+        await self.update_available_cores()
+
         self.leave_room(sid, 'slave')
         self.connections.pop(uid, None)
 
@@ -768,9 +774,11 @@ class SlaveNamespace(socketio.AsyncNamespace):
                 self.up.admin_ns.info['change_core'][uid]
             # Update table
             self.up.slave_table.update_object(uid + '_s', self.properties[uid])
+
             # Update available cores
-            await self.update_available_cores(
-                self.properties[uid]['USED_CORES'] - old)
+            self.core_info[uid] = self.properties[uid]['USED_CORES'] * \
+                                  self.properties[uid]['P']
+            await self.update_available_cores()
         self.up.admin_ns.events['change_core'].set()
 
 
