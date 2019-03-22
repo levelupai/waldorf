@@ -332,59 +332,59 @@ class Namespace(SocketIONamespace):
             self.w_prefetch_multi = 1
             self.up.waldorf_info['prefetch_multi'] = self.w_prefetch_multi
 
-        if len(self.workers.keys()) != 0 and self.up.cfg.core != 0 \
-                and time.time() - self.time > 300:
-            flag = False
-            if self.up.waldorf_info['load_per_5'] >= 95 \
-                    and self.w_prefetch_multi > 1:
-                self.up.logger_output('info',
-                                      'w_prefetch_multi argument: {} -> {}'
-                                      .format(self.w_prefetch_multi,
-                                              self.w_prefetch_multi - 1),
-                                      get_frame())
-                self.w_prefetch_multi -= 1
-                flag = True
-            if self.up.waldorf_info['load_per_5'] < 70 \
-                    and self.w_prefetch_multi < 6:
-                self.up.logger_output('info',
-                                      'w_prefetch_multi argument: {} -> {}'
-                                      .format(self.w_prefetch_multi,
-                                              self.w_prefetch_multi + 1),
-                                      get_frame())
-                self.w_prefetch_multi += 1
-                flag = True
-            if flag:
-                self.busy += 1
-                self.up.waldorf_info['ready'] = 'True' \
-                    if self.busy == 0 else 'False'
-                self.log('changed prefetch_multi due to load average',
-                         get_frame())
-                self.time = time.time()
-                self.up.waldorf_info['prefetch_multi'] = self.w_prefetch_multi
-
-                if self.up.cfg.core > 0:
-                    self.worker_lock.acquire()
-                    for uid in self.workers:
-                        if 'worker' in self.info[uid]:
-                            self.terminate_worker(uid)
-                    self.worker_lock.release()
-
-                    self.log('terminated and wait for 1 seconds',
-                             get_frame())
-                    time.sleep(1)
-
-                    # Restart workers one by one.
-                    self.worker_lock.acquire()
-                    for uid in self.workers:
-                        args = self.workers[uid]
-                        args = copy.deepcopy(args)
-                        args.extend([self.w_prefetch_multi, self.up.cfg])
-                        self.setup_worker(args)
-                    self.worker_lock.release()
-
-                self.busy -= 1
-                self.up.waldorf_info['ready'] = 'True' \
-                    if self.busy == 0 else 'False'
+        # if len(self.workers.keys()) != 0 and self.up.cfg.core != 0 \
+        #         and time.time() - self.time > 300:
+        #     flag = False
+        #     if self.up.waldorf_info['load_per_5'] >= 95 \
+        #             and self.w_prefetch_multi > 1:
+        #         self.up.logger_output('info',
+        #                               'w_prefetch_multi argument: {} -> {}'
+        #                               .format(self.w_prefetch_multi,
+        #                                       self.w_prefetch_multi - 1),
+        #                               get_frame())
+        #         self.w_prefetch_multi -= 1
+        #         flag = True
+        #     if self.up.waldorf_info['load_per_5'] < 70 \
+        #             and self.w_prefetch_multi < 6:
+        #         self.up.logger_output('info',
+        #                               'w_prefetch_multi argument: {} -> {}'
+        #                               .format(self.w_prefetch_multi,
+        #                                       self.w_prefetch_multi + 1),
+        #                               get_frame())
+        #         self.w_prefetch_multi += 1
+        #         flag = True
+        #     if flag:
+        #         self.busy += 1
+        #         self.up.waldorf_info['ready'] = 'True' \
+        #             if self.busy == 0 else 'False'
+        #         self.log('changed prefetch_multi due to load average',
+        #                  get_frame())
+        #         self.time = time.time()
+        #         self.up.waldorf_info['prefetch_multi'] = self.w_prefetch_multi
+        #
+        #         if self.up.cfg.core > 0:
+        #             self.worker_lock.acquire()
+        #             for uid in self.workers:
+        #                 if 'worker' in self.info[uid]:
+        #                     self.terminate_worker(uid)
+        #             self.worker_lock.release()
+        #
+        #             self.log('terminated and wait for 1 seconds',
+        #                      get_frame())
+        #             time.sleep(1)
+        #
+        #             # Restart workers one by one.
+        #             self.worker_lock.acquire()
+        #             for uid in self.workers:
+        #                 args = self.workers[uid]
+        #                 args = copy.deepcopy(args)
+        #                 args.extend([self.w_prefetch_multi, self.up.cfg])
+        #                 self.setup_worker(args)
+        #             self.worker_lock.release()
+        #
+        #         self.busy -= 1
+        #         self.up.waldorf_info['ready'] = 'True' \
+        #             if self.busy == 0 else 'False'
 
         threading.Thread(target=self.update).start()
 

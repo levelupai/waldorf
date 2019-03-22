@@ -400,8 +400,7 @@ class ClientNamespace(socketio.AsyncNamespace):
     async def update_client_cores(self, room, uid=''):
         if self.client_num == 0:
             return
-        self._cores = int(self.up.slave_ns.available_cores /
-                          self.client_num * 1.1)
+        self._cores = int(self.up.slave_ns.available_cores * 1.1)
         if uid == '':
             self.up.logger.info('update client cores. '
                                 'cores: {} room: {}'.format(self._cores, room))
