@@ -6,7 +6,6 @@ import sys
 import re
 import traceback
 from waldorf.cfg import WaldorfCfg
-import time
 
 
 class EnvCmd(object):
@@ -305,10 +304,10 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
             m = re.search("Cloning into '(.*)'\.\.\.", output, flags=re.M)
             folder_name = m.group(1)
             credential = self.get_credential(repo)
-            Username = credential['Username']
-            Password = credential['Password']
-            self._tmp_sess.sess.sendline(Username)
-            self._tmp_sess.sess.sendline(Password)
+            username = credential['Username']
+            password = credential['Password']
+            self._tmp_sess.sess.sendline(username)
+            self._tmp_sess.sess.sendline(password)
             self._tmp_sess.expect(self.default_expect)
             output = self._tmp_sess.sess.before
             output = output.decode()
@@ -320,9 +319,9 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
             self._tmp_sess.run('git config credential.helper '
                                '"store --file=.git/.git-credentials"')
             self._tmp_sess.sess.sendline('git pull')
-            self._tmp_sess.sess.sendline(Username)
+            self._tmp_sess.sess.sendline(username)
             self._tmp_sess.expect('Password for')
-            self._tmp_sess.sess.sendline(Password)
+            self._tmp_sess.sess.sendline(password)
             self._tmp_sess.expect(self.default_expect)
             self._tmp_sess.run('cd ..')
         else:
@@ -341,11 +340,11 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
             return self._tmp_sess.sess.before
         elif index == 1:
             credential = self.get_credential(repo)
-            Username = credential['Username']
-            Password = credential['Password']
-            self._tmp_sess.sess.sendline(Username)
+            username = credential['Username']
+            password = credential['Password']
+            self._tmp_sess.sess.sendline(username)
             self._tmp_sess.expect('Password for')
-            self._tmp_sess.sess.sendline(Password)
+            self._tmp_sess.sess.sendline(password)
             self._tmp_sess.expect(self.default_expect)
         else:
             raise Exception('Git command fail')
@@ -435,5 +434,5 @@ class WaldorfEnv(_MajorCmd, _MinorCmd):
         try:
             self._get_env(pairs, suites)
             return 0, 'Success'
-        except Exception as e:
+        except:
             return -1, traceback.format_exc()
