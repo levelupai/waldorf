@@ -29,6 +29,11 @@ def collect_exp(args):
             if done:
                 break
     env.close()
+
+    # Empty operation to simulate CPU intensive tasks
+    for i in range(int(2e2)):
+        for j in range(int(1e6)):
+            pass
     # return experience collected by workers
     return exps
 
@@ -50,6 +55,7 @@ class GymDemo(object):
         # Debug level 1: output waldorf log
         # Debug level 2: output waldorf log and socketio log
         cfg.debug = 1
+        cfg.result_timeout = 20
 
         cfg.env_cfg.already_exist = 'remove'
         cfg.env_cfg.version_mismatch = 'remove'
@@ -111,13 +117,9 @@ class GymDemo(object):
             )
         ]
 
-        print('check_slave', self.client.check_slave())
         print('echo', self.client.echo())
 
-        resp = self.client.get_env('waldorf_gym_test', pairs, suites)
-        for hostname, r in resp:
-            if r[0] < 0:
-                raise Exception(hostname, r[1])
+        self.client.get_env('waldorf_gym_test', pairs, suites)
 
         # Register task on slave
         self.client.reg_task(collect_exp)
@@ -131,11 +133,16 @@ class GymDemo(object):
         # Callback function should not be too complex
         # Waldorf will use another thread to retrieve result and invoke callback
         self.results.append(result)
+        self._complete += 1
+        print('{} tasks complete.'.format(self._complete))
 
     def play(self):
         # You can use submit with callback
         # which will let you collect results when the task is done
-        for i in range(100):
+        play_num = 200
+        self.client.set_task_num(play_num)
+        self._complete = 0
+        for i in range(play_num):
             episode = random.randint(20, 50)
             self.client.submit(collect_exp, ('CartPole-v0', episode),
                                callback=self.callback)

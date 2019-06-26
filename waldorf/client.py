@@ -1,4 +1,3 @@
-from socketIO_client import SocketIO, SocketIONamespace
 import multiprocessing as mp
 import threading
 import functools
@@ -7,26 +6,22 @@ import logging
 import inspect
 import pickle
 import base64
-import socket
 import queue
 import uuid
 import time
-import sys
 
 import billiard.exceptions
 from celery import Celery
 import redis
 
+from socketio import Client
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
 import Crypto.Util.number
 
-from waldorf.util import DummyLogger, Dummytqdm, init_logger, get_path, \
-    ColoredFormatter, get_system_info, obj_encode, get_local_ip
 from waldorf.cfg import WaldorfCfg
-from waldorf import _WaldorfAPI
-from waldorf.threading_u import DSemaphore
-import waldorf
+from waldorf.common import *
+from waldorf.util import *
 
 
 class CeleryResultThread(threading.Thread):
@@ -35,26 +30,27 @@ class CeleryResultThread(threading.Thread):
     def __init__(self, up):
         super(CeleryResultThread, self).__init__()
         self.up = up
+        assert isinstance(self.up, _WaldorfSio)
         self.res_q = self.up.result_q
         self.sio_q = self.up.sio_queue[0]
         self.cfg = self.up.cfg
-        self.retrying_task = []
         self.daemon = True
         self.client = redis.StrictRedis(host=self.cfg.broker_ip,
                                         port=self.cfg.redis_port)
 
     def run(self):
+        assert isinstance(self.up, _WaldorfSio)
         task_list = []
         remove_list = []
-        flag = False
+        exit_flag = False
         while True:
             for i in range(self.res_q[0].qsize()):
                 task_uid, r = self.res_q[0].get()
-                if r == _WaldorfAPI.CLEAN_UP:
-                    flag = True
+                if r == WaldorfAPI.EXIT:
+                    exit_flag = True
                     break
                 task_list.append((task_uid, r))
-            if flag:
+            if exit_flag:
                 break
             if len(task_list) == 0:
                 time.sleep(0.05)
@@ -62,103 +58,120 @@ class CeleryResultThread(threading.Thread):
             for task_uid, r in task_list:
                 task_meta_id = 'celery-task-meta-' + r.id
                 exist = self.client.exists(task_meta_id)
-                if exist:
-                    try:
-                        res = self.client.get(task_meta_id)
-                        res = pickle.loads(res)
-                        if res['traceback']:
-                            if isinstance(res['traceback'],
-                                          redis.ConnectionError):
-                                if not self.handle_retry(
-                                        task_uid, r, remove_list,
-                                        etype=type(res['traceback'])):
-                                    flag = True
-                                    break
-                            else:
-                                raise Exception(res['traceback'])
-                        else:
-                            res = res['result']
-                            if isinstance(
-                                    res, (redis.ConnectionError,
-                                          billiard.exceptions.WorkerLostError)):
-                                if not self.handle_retry(
-                                        task_uid, r, remove_list,
-                                        etype=type(res)):
-                                    flag = True
-                                    break
-                            else:
-                                # Receive result and put it into queue
-                                self.res_q[1].put((task_uid, res))
-                                self.up.info['tasks'].pop(task_uid)
-                                # Remove retrying task and restore retry flag
-                                if task_uid in self.retrying_task:
-                                    self.retrying_task.remove(task_uid)
-                                    if len(self.retrying_task) == 0:
-                                        self.up.retry_flag = False
-                                # Add result to remove list
-                                remove_list.append((task_uid, r))
-                    except Exception as e:
-                        # catch any exceptions and print it
-                        print('L102: ' + traceback.format_exc())
-                        # after that clean up slave
-                        self.sio_q.put((_WaldorfAPI.CLEAN_UP, None))
-                        flag = True
-                        break
-                else:
+
+                if not exist:
                     now = time.time()
-                    submit_time = self.up.info['tasks'][task_uid]['submit_time']
+                    submit_time = self.up.pvte_info.ti[task_uid].submit_time
                     timeout = self.cfg.result_timeout - (now - submit_time)
+
+                    if timeout >= 0:
+                        time.sleep(0.05)
+                        continue
+
                     # Register timeout tasks
-                    if timeout < 0:
-                        if self.cfg.retry_enable:
-                            if not self.handle_retry(
-                                    task_uid, r, remove_list, etype='Timeout'):
-                                flag = True
-                                break
-                        else:
-                            self.up.logger.warning('Task timeout ignore.')
-                            # Return None when timeout
-                            self.res_q[1].put((task_uid, None))
-                            self.up.info['tasks'].pop(task_uid)
-                            # Remove retrying task and restore retry flag
-                            if task_uid in self.retrying_task:
-                                self.retrying_task.remove(task_uid)
-                                if len(self.retrying_task) == 0:
-                                    self.up.retry_flag = False
-                            # Add result to remove list
-                            remove_list.append((task_uid, r))
-                    time.sleep(0.05)
+                    if not self.cfg.retry_enable:
+                        self.up.logger.warning('Task timeout ignore.')
+                        # Return None when timeout
+                        self.res_q[1].put((task_uid, None))
+                        self.up.pvte_info.ti.pop(task_uid)
+                        # Remove retrying task and restore retry flag
+                        if task_uid in self.up.pvte_info.retry_tasks:
+                            self.up.pvte_info.retry_tasks.remove(task_uid)
+                            if len(self.up.pvte_info.retry_tasks) == 0 and \
+                                    self.up.pvte_info.retry_flag:
+                                self.up.pvte_info.retry_flag = False
+                        # Add result to remove list
+                        remove_list.append((task_uid, r))
+                        self.up.pvte_info.sema.release()
+                        continue
+
+                    if not self.handle_retry(
+                            task_uid, r, remove_list, etype='Timeout'):
+                        exit_flag = True
+                        break
+                    continue
+
+                try:
+                    res = self.client.get(task_meta_id)
+                    res = pickle.loads(res)
+                    if res['traceback']:
+                        if not isinstance(
+                                res['traceback'], redis.ConnectionError):
+                            raise Exception(res['traceback'])
+                        if not self.handle_retry(
+                                task_uid, r, remove_list,
+                                etype=type(res['traceback'])):
+                            exit_flag = True
+                            break
+                        continue
+
+                    res = res['result']
+                    if isinstance(
+                            res, (redis.ConnectionError,
+                                  billiard.exceptions.WorkerLostError)):
+                        if not self.handle_retry(
+                                task_uid, r, remove_list, etype=type(res)):
+                            exit_flag = True
+                            break
+                        continue
+
+                    # Receive result and put it into queue
+                    self.res_q[1].put((task_uid, res))
+                    self.up.pvte_info.ti.pop(task_uid)
+
+                    # Remove retrying task and restore retry flag
+                    if task_uid in self.up.pvte_info.retry_tasks:
+                        self.up.pvte_info.retry_tasks.remove(task_uid)
+                        if len(self.up.pvte_info.retry_tasks) == 0 and \
+                                self.up.pvte_info.retry_flag:
+                            self.up.pvte_info.retry_flag = False
+                    # Add result to remove list
+                    remove_list.append((task_uid, r))
+                    self.up.pvte_info.sema.release()
+                except:
+                    # catch any exceptions and print it
+                    print('L{}: {}'.format(
+                        get_linenumber(), traceback.format_exc()))
+                    # after that clean up slave
+                    self.up.on_exit()
+                    exit_flag = True
+                    break
 
             for task_uid, r in remove_list:
                 task_list.remove((task_uid, r))
             remove_list.clear()
 
     def handle_retry(self, task_uid, r, remove_list, etype=''):
-        self.up.info['tasks'][task_uid]['retry_times'] += 1
+        assert isinstance(self.up, _WaldorfSio)
+        _ti = self.up.pvte_info.ti[task_uid]
+        _ti.retry_times += 1
+        retry_times = _ti.retry_times
         # Enable retry flag when any task already retried more than expected
-        if self.up.info['tasks'][task_uid]['retry_times'] >= \
-                self.cfg.retry_times - 1 and \
-                task_uid not in self.retrying_task:
-            self.retrying_task.append(task_uid)
-            self.up.retry_flag = True
-        task_name, args = self.up.info['tasks'][task_uid]['info']
-        if self.up.info['tasks'][task_uid]['retry_times'] \
-                > self.cfg.retry_times:
-            self.up.logger.error('Maximum retry times reached. '
-                                 'task_name: {}, uid: {}'.format(task_name,
-                                                                 task_uid))
-            print('L150: Maximum retry times reached. Exit.')
-            self.sio_q.put((_WaldorfAPI.CLEAN_UP, None))
+        if retry_times >= self.cfg.retry_times // 2 and \
+                task_uid not in self.up.pvte_info.retry_tasks:
+            self.up.pvte_info.retry_tasks.append(task_uid)
+            if not self.up.pvte_info.retry_flag:
+                # Enable when any task already retried more than expected
+                # This will disable new task submit until the lock is released
+                self.up.pvte_info.retry_flag = True
+                self.up.logger.warning('Retry flag enable.')
+        task_name, args = _ti.info
+        if retry_times > self.cfg.retry_times:
+            self.up.logger.error(
+                'Maximum retry times reached. '
+                'task_name: {}, uid: {}'.format(task_name, task_uid))
+            print('L{}: Maximum retry times reached. Exit.'
+                  .format(get_linenumber()))
+            self.up.on_exit()
             return False
         self.up.logger.warning(
-            'Receive {}. Resend task. retry_times: {}, task_name: {}, uid: {}'.
-                format(etype, self.up.info['tasks'][task_uid]['retry_times'],
-                       task_name, task_uid))
+            'Receive {}. Resend task. '
+            'retry_times: {}, task_name: {}, uid: {}'
+                .format(etype, retry_times, task_name, task_uid))
         remove_list.append((task_uid, r))
-        r = self.up.info['task_handlers'][task_name].apply_async(
+        r = self.up.pvte_info.ri.task_handlers[task_name].apply_async(
             args=(args,))
-        self.up.info['tasks'][task_uid][
-            'submit_time'] = time.time()
+        _ti.submit_time = time.time()
         self.up.result_q[0].put((task_uid, r))
         return True
 
@@ -170,19 +183,55 @@ class SockWaitThread(threading.Thread):
         self.daemon = True
 
     def run(self):
-        while self.up.alive:
-            # https://github.com/invisibleroads/socketIO-client/issues/148
-            try:
-                self.up.sock.wait()
-            except IndexError:
-                self.up.logger.debug('Index error. Connect to {}:{} with uid {}'
-                                     .format(self.up.cfg.master_ip,
-                                             self.up.cfg.waldorf_port,
-                                             self.up.uid))
-                self.up.sock = SocketIO(self.up.cfg.master_ip,
-                                        self.up.cfg.waldorf_port)
-                self.up.client_ns = self.up.sock.define(Namespace, '/client')
-                self.up.client_ns.setup(self.up)
+        assert isinstance(self.up, _WaldorfSio)
+        self.up.pvte_info.sio.wait()
+
+
+class AdjustLimitThread(threading.Thread):
+    def __init__(self, up):
+        super(AdjustLimitThread, self).__init__()
+        self.up = up
+        assert isinstance(self.up, _WaldorfSio)
+        self.sio_q = self.up.sio_queue[0]
+        self.limit = 0
+        self.last_retry_flag = False
+        self.daemon = True
+
+    @property
+    def limit_and_reason(self):
+        limit = 0
+        reason = ''
+        if self.up.pvte_info.retry_flag:
+            if self.up.pvte_info.limit // 5 != limit // 5 and \
+                    self.up.pvte_info.limit != 5:
+                limit = max(self.up.pvte_info.sema.remain, 5)
+                reason = 'retry flag enable'
+            return limit, reason
+
+        _limit = self.up.pvte_info.sema.remain + \
+                 self.up.pvte_info.task_num
+
+        if self.last_retry_flag:
+            limit = _limit
+            reason = 'retry flag disable'
+            return limit, reason
+
+        if _limit < self.up.pvte_info.limit != 5 and \
+                self.up.pvte_info.limit // 5 != _limit // 5:
+            limit = max(_limit, 5)
+            reason = 'task num less than limit'
+        return limit, reason
+
+    def run(self):
+        assert isinstance(self.up, _WaldorfSio)
+        time.sleep(60)
+        while True:
+            limit, reason = self.limit_and_reason
+            if limit > 0:
+                self.limit = limit
+                self.up.on_set_limit(self.limit, reason)
+            self.last_retry_flag = self.up.pvte_info.retry_flag
+            time.sleep(15)
 
 
 class _WaldorfSio(mp.Process):
@@ -194,152 +243,132 @@ class _WaldorfSio(mp.Process):
         self.sio_queue = sio_queue
         self.submit_queue = submit_queue
         self.nb_queue = nb_queue
-        self.alive = True
+
+        self.publ_info = ClientPublInfo()
+        self.pvte_info = ClientPvteInfo()
+        self.remote_info = MasterPublInfo()
 
     def setup(self):
-        # Generate uid for client.
-        self.uid = str(uuid.uuid4())
-        self.system_info = get_system_info()
+        # S1: Setup socketio client.
+        self.publ_info = self.sio_queue[0].get()
         self.cfg = self.sio_queue[0].get()
-        self.debug = self.cfg.debug
+
+        assert isinstance(self.publ_info, ClientPublInfo)
+        self.publ_info.cfg = self.cfg
+        self.pvte_info.cfg = self.cfg
+        self.ignore_events = ['submit']
+
+        # S1.1: Setup logger.
         self.setup_logger()
+
+        # S1.2: Connect to Waldorf master.
+        from waldorf.namespace.client import Namespace
+        self.logger.debug(
+            'Connect to {}:{} with uid {}'.format(
+                self.cfg.master_ip, self.cfg.waldorf_port,
+                self.publ_info.uid))
+        if self.cfg.debug >= 2:
+            sio = Client(logger=self.logger)
+        else:
+            sio = Client()
+        self.pvte_info.sio = sio
+        ns = Namespace('/client')
+        ns.setup(self)
+        self.pvte_info.ns = ns
+        sio.register_namespace(ns)
+        sio.connect('http://{}:{}'.format(
+            self.cfg.master_ip, self.cfg.waldorf_port))
+
         self.result_q = [queue.Queue(), self.submit_queue[0]]
-        self.client = redis.StrictRedis(host=self.cfg.broker_ip,
-                                        port=self.cfg.redis_port)
-        self.rt = CeleryResultThread(self)
-        self.rt.start()
-        # Enable when any task already retried more than expected
-        # This will disable new task submit until the lock is released
-        self.retry_flag = False
-
-        # Collect information.
-        self.waldorf_info = {'uid': self.uid,
-                             'hostname': socket.gethostname(),
-                             'ver': waldorf.__version__,
-                             'ip': get_local_ip(),
-                             'os': self.system_info.os,
-                             'cpu_type': self.system_info.cpu_type,
-                             'cpu_count': self.system_info.cpu_count,
-                             'cfg_core': self.cfg.core,
-                             'mem': self.system_info.mem,
-                             'load_avg1': ' ',
-                             'load_avg5': ' ',
-                             'load_avg15': ' ',
-                             'prefetch_multi': ' ',
-                             'ready': ' '}
-
-        # Connect to Waldorf master.
-        self.sock = SocketIO(self.cfg.master_ip, self.cfg.waldorf_port)
-        self.logger.debug('Connect to {}:{} with uid {}'.format(
-            self.cfg.master_ip, self.cfg.waldorf_port, self.uid))
-        self.client_ns = self.sock.define(Namespace, '/client')
-        self.client_ns.setup(self)
-
-        self.events = {}
-        self.info = {}
-        self.info['tasks'] = {}
-        self._code = None
+        CeleryResultThread(self).start()
 
     def setup_logger(self):
-        if self.debug >= 2:
-            # Logging socketIO-client output.
-            _cf = ['$GREEN[%(asctime)s]$RESET',
-                   '[%(name)s]',
-                   '$BLUE[%(filename)20s:%(funcName)15s:%(lineno)5d]$RESET',
-                   '[%(levelname)s]',
-                   ' $CYAN%(message)s$RESET']
-            cformatter = ColoredFormatter('-'.join(_cf))
-
-            logger = logging.getLogger('socketIO-client')
-            logger.setLevel(logging.DEBUG)
-            ch = logging.StreamHandler(sys.stdout)
-            ch.setFormatter(cformatter)
-            logger.addHandler(ch)
-        if self.debug >= 1:
+        if self.cfg.debug >= 1:
             # Logging Waldorf client.
-            self.logger = init_logger('wd_client',
-                                      get_path(relative_path='.'),
-                                      (logging.DEBUG, logging.DEBUG))
+            self.logger = init_logger(
+                'wd_client', get_path(relative_path='.'),
+                (logging.DEBUG, logging.DEBUG))
         else:
             self.logger = DummyLogger()
 
     def put(self, r):
         self.sio_queue[1].put(r)
 
+    def get_response(self, api, resp=None, count=-1):
+        if count == -1:
+            count = self.remote_info.slave_num
+        key = api + '_count'
+        self.pvte_info.events[key] = count + 1
+        key = api + '_resp'
+        self.pvte_info.responses[key] = []
+        self.pvte_info.events[api] = threading.Event()
+        if resp is None:
+            self.pvte_info.ns.emit(api)
+        else:
+            assert isinstance(resp, Response)
+            self.pvte_info.ns.emit(api, resp.encode())
+        time.sleep(0.01)
+        self.pvte_info.events[api].wait()
+        self.pvte_info.events.pop(api, None)
+        key = api + '_count'
+        self.pvte_info.events.pop(key, None)
+        response = self.pvte_info.responses[api + '_resp']
+        return response
+
     def on_echo(self):
         """Send echo message."""
-        self.logger.debug('enter on_echo')
-        self.info['echo_count'] = len(self.info['check_slave_resp'].keys()) + 1
-        self.info['echo_resp'] = []
-        self.events['echo'] = threading.Event()
-        self.client_ns.emit(_WaldorfAPI.ECHO)
-        time.sleep(0.01)
-        self.events['echo'].wait()
-        self.put(self.info['echo_resp'])
-        self.logger.debug('leave on_echo')
-
-    def on_check_ver(self):
-        """Send check version message."""
-        self.logger.debug('enter on_check_ver')
-        self.events['check_ver'] = threading.Event()
-        self.client_ns.emit(_WaldorfAPI.CHECK_VER, waldorf.__version__)
-        time.sleep(0.01)
-        self.events['check_ver'].wait()
-        self.put(self.info['check_ver_resp'])
-        self.logger.debug('leave on_check_ver')
-
-    def on_get_cores(self):
-        """Send get cores message."""
-        self.logger.debug('enter on_get_cores')
-        self.events['get_cores'] = threading.Event()
-        self.client_ns.emit(_WaldorfAPI.GET_CORES)
-        time.sleep(0.01)
-        self.events['get_cores'].wait()
-        self.events.pop('get_cores')
-        self.put(self.info['get_cores_resp'])
-        self.logger.debug('leave on_get_cores')
-
-    def on_check_slave(self):
-        """Send check slave message."""
-        self.logger.debug('enter on_check_slave')
-        self.events['check_slave'] = threading.Event()
-        self.client_ns.emit(_WaldorfAPI.CHECK_SLAVE)
-        time.sleep(0.01)
-        self.events['check_slave'].wait()
-        self.put(len(self.info['check_slave_resp'].keys()))
-        self.logger.debug(self.info['check_slave_resp'])
-        self.logger.debug('leave on_check_slave')
+        resp = self.get_response(WaldorfAPI.ECHO)
+        self.put(resp)
 
     def on_get_env(self, name, pairs, suites, cfg):
         """Send get environment message.
 
         This method will wait until all responses are received.
         """
-        self.logger.debug('enter on_get_env')
+        if cfg.env_cfg.git_credential is not None:
+            args = cfg
+            resp = Response(self.publ_info.hostname,
+                            0, args)
+            resp = self.get_response(
+                WaldorfAPI.CHECK_GIT_C, resp, count=0)[0]
+            if resp.code < 0:
+                self.put((resp,))
+                return
+
         args = (name, pairs, suites, cfg)
-        args = obj_encode(args)
-        self.events['get_env'] = threading.Event()
-        self.client_ns.emit(_WaldorfAPI.GET_ENV, args)
-        time.sleep(0.01)
-        self.events['get_env'].wait()
-        self.logger.debug(self.info['get_env_resp'])
-        self.put(self.info['get_env_resp'])
-        self.logger.debug('leave on_get_env')
+        self.pvte_info.ri.env_args = args
+
+        args = (name, pairs, len(suites), cfg)
+        resp = Response(self.publ_info.hostname,
+                        0, args)
+        self.get_response(WaldorfAPI.GET_ENV, resp, count=0)
+        for i in range(len(suites)):
+            args = suites[i]
+            resp = Response(self.publ_info.hostname,
+                            0, args)
+            self.get_response(WaldorfAPI.GET_ENV, resp, count=0)
+        resp = Response(self.publ_info.hostname,
+                        0, 'Finished')
+        resp = self.get_response(WaldorfAPI.GET_ENV, resp)
+        self.logger.debug(resp)
+        self.put(resp)
 
     def on_reg_task(self, task_name, task_code, opts):
         """Send register task message.
 
         Send task code to master server.
         """
-        self.logger.debug('enter on_reg_task')
         l = {}
         exec(task_code, {}, l)
-        self._code = l[task_name]
-        self.info['tasks'][task_name] = [self._code, opts]
-        self.client_ns.emit(_WaldorfAPI.REG_TASK, (self.uid, task_name,
-                                                   task_code, opts))
-        self.put(0)
-        self.logger.debug('leave on_reg_task')
+        _code = l[task_name]
+
+        self.pvte_info.ri.tasks[task_name] = (_code, opts)
+        args = (task_name, task_code, opts)
+        resp = Response(self.publ_info.hostname,
+                        0, args)
+        resp = self.get_response(WaldorfAPI.REG_TASK, resp)
+        self.logger.debug(resp)
+        self.put(resp)
 
     def on_freeze(self):
         """Send freeze message.
@@ -347,50 +376,46 @@ class _WaldorfSio(mp.Process):
         Create new celery client and send freeze message.
         It will wait until all slaves are set up.
         """
-        self.logger.debug('enter on_freeze')
         self.cfg.update()
-        self.app_name = 'app-' + self.uid
-        self.info['app'] = app = Celery(self.app_name,
-                                        broker=self.cfg.celery_broker,
-                                        backend=self.cfg.celery_backend)
-        app.conf.task_default_queue = self.app_name
+        self.pvte_info.ri.app_name = 'app-' + self.publ_info.uid
+        self.pvte_info.app = app = Celery(
+            self.pvte_info.ri.app_name,
+            broker=self.cfg.celery_broker,
+            backend=self.cfg.celery_backend)
+        app.conf.task_default_queue = self.pvte_info.ri.app_name
         app.conf.accept_content = ['json', 'pickle']
         app.conf.task_serializer = 'pickle'
         app.conf.result_serializer = 'pickle'
         app.conf.task_acks_late = True
         app.conf.worker_lost_wait = 60.0
         app.conf.result_expires = 1800
-        self.info['task_handlers'] = {}
-        for name, task in self.info['tasks'].items():
-            self.info['task_handlers'][name] = app.task(**task[1])(task[0])
-            self.info['task_handlers'][name].ignore_result = True
-        self.info['freeze_count'] = len(self.info['check_slave_resp'].keys())
-        self.info['freeze_resp'] = []
-        self.events['freeze'] = threading.Event()
-        self.client_ns.emit(_WaldorfAPI.FREEZE, self.uid)
-        time.sleep(0.01)
-        self.events['freeze'].wait()
-        self.put(0)
-        self.logger.debug('leave on_freeze')
+        for name, task in self.pvte_info.ri.tasks.items():
+            _task = app.task(**task[1])(task[0])
+            self.pvte_info.ri.task_handlers[name] = _task
+            self.pvte_info.ri.task_handlers[name].ignore_result = True
+        hostname = self.publ_info.hostname
+        resp = Response(hostname, 0, self.cfg.prefetch_multi)
+        resp = self.get_response(WaldorfAPI.FREEZE, resp, count=0)
+        self.put(resp)
 
     def on_submit(self, task_uid, task_name, args):
         """Send the job to celery broker and use queue to get the result."""
         # Block until retry flag is False
-        while self.retry_flag:
+        while self.pvte_info.retry_flag:
             time.sleep(0.1)
-        self.info['tasks'][task_uid] = {}
-        self.info['tasks'][task_uid]['retry_times'] = 0
-        self.info['tasks'][task_uid]['info'] = (task_name, args)
-        self.info['tasks'][task_uid]['submit_time'] = time.time()
-        r = self.info['task_handlers'][task_name].apply_async(
+        self.pvte_info.sema.acquire()
+        info = self.pvte_info.ti[task_uid]
+        info.info = (task_name, args)
+        r = self.pvte_info.ri.task_handlers[task_name].apply_async(
             args=(args,))
         self.result_q[0].put((task_uid, r))
+        self.pvte_info.task_num -= 1
         self.put(0)
 
     def encrypt(self, cipher, info):
-        """Resolve "ValueError: Plaintext is too long." in Crypto."""
-        key_len = Crypto.Util.number.ceil_div(Crypto.Util.number.size(
-            cipher._key.n), 8)
+        """Resolve 'ValueError: Plaintext is too long.' in Crypto."""
+        key_len = Crypto.Util.number.ceil_div(
+            Crypto.Util.number.size(cipher._key.n), 8)
         length = key_len - 20
         cipher_text = b''
         for i in range(0, len(info), length):
@@ -403,130 +428,109 @@ class _WaldorfSio(mp.Process):
 
         Receive public key from server and encrypt information.
         """
-        self.logger.debug('enter on_gen_git_c')
-        self.events['gen_git_c'] = threading.Event()
-        self.client_ns.emit(_WaldorfAPI.GEN_GIT_C)
-        time.sleep(0.01)
-        self.events['gen_git_c'].wait()
-        info = pickle.dumps(info, -1)
-        self._public_pem = self.info['gen_git_c_resp'].encode()
+        resp = self.get_response(WaldorfAPI.GEN_GIT_C, count=0)
+        self._public_pem = Response.decode(resp[0]).resp
         rsa_key = RSA.importKey(self._public_pem)
         cipher = PKCS1_v1_5.new(rsa_key)
+        info = pickle.dumps(info, -1)
         cipher_text = self.encrypt(cipher, info)
         self.put(cipher_text)
 
-    def on_clean_up(self):
+    def on_exit(self):
         """Send clean up and exit message."""
-        self.logger.debug('enter on_clean_up')
-        self.client_ns.emit(_WaldorfAPI.CLEAN_UP, self.uid)
-        self.client_ns.emit(_WaldorfAPI.EXIT, self.uid)
+        self.result_q[0].put((0, WaldorfAPI.EXIT))
+        resp = Response(self.publ_info.hostname,
+                        0, self.publ_info.uid)
+        self.get_response(WaldorfAPI.EXIT, resp, count=0)
         time.sleep(0.05)
-        self.alive = False
-        self.result_q[0].put((0, _WaldorfAPI.CLEAN_UP))
-        self.logger.debug('leave on_clean_up')
 
-    def get_handler(self, api):
+    def on_set_limit(self, limit, reason):
+        """Send get cores message."""
+        self.logger.debug('Set limit to {} due to {}.'.format(
+            limit, reason))
+        if reason == 'set task num':
+            self.pvte_info.task_num = limit
+        hostname = self.publ_info.hostname
+        resp = Response(hostname, 0, limit)
+        self.pvte_info.ns.emit(WaldorfAPI.SET_LIMIT, resp.encode())
+
+    def log_event(self, event, msg):
+        if event in self.ignore_events:
+            return
+        self.logger.debug('{} {}'.format(msg, event))
+
+    def get_handler(self, api, *args):
         """Just a way to automatically find handler method."""
-        return self.__getattribute__('on_' + api)
+        self.log_event(api, 'enter')
+        handler_name = 'on_' + api
+        if hasattr(self, handler_name):
+            handler = getattr(self, handler_name)
+            handler(*args)
+        self.log_event(api, 'leave')
 
     def run(self):
+        import signal
+        # Avoid connection dropped when sending exit command
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         self.setup()
         SockWaitThread(self).start()
+        AdjustLimitThread(self).start()
+
         while True:
             try:
                 cmd = self.sio_queue[0].get()
                 if cmd:
+                    if cmd[0] != WaldorfAPI.SUBMIT:
+                        self.logger.debug(
+                            'Receive {} command.'.format(cmd[0]))
                     if cmd[1]:
-                        self.get_handler(cmd[0])(*cmd[1])
+                        self.get_handler(cmd[0], *cmd[1])
                     else:
-                        self.get_handler(cmd[0])()
-                    if cmd[0] == _WaldorfAPI.CLEAN_UP:
+                        self.get_handler(cmd[0])
+                    if cmd[0] == WaldorfAPI.EXIT:
                         break
             except KeyboardInterrupt:
-                self.on_clean_up()
+                self.logger.debug('Receive keyboard interrupt.')
+                self.on_exit()
                 break
             except Exception as e:
-                self.on_clean_up()
+                self.on_exit()
                 raise e
-        self.sock.disconnect()
-        self.logger.debug('loop end')
-
-
-class Namespace(SocketIONamespace):
-    def setup(self, up: _WaldorfSio):
-        self.up = up
-        self.emit(_WaldorfAPI.GET_INFO + '_resp',
-                  obj_encode(self.up.waldorf_info))
-
-    def on_reconnect(self):
-        self.up.logger.debug('on_reconnect')
-        self.emit(_WaldorfAPI.GET_INFO + '_resp',
-                  obj_encode(self.up.waldorf_info))
-
-    def on_echo_resp(self, resp):
-        self.up.logger.debug('on_echo_resp')
-        self.up.info['echo_resp'].append(resp)
-        self.up.info['echo_count'] -= 1
-        if self.up.info['echo_count'] <= 0:
-            self.up.events['echo'].set()
-
-    def on_get_env_resp(self, resp):
-        self.up.logger.debug('on_get_env_resp')
-        self.up.info['get_env_resp'] = resp
-        self.up.events['get_env'].set()
-
-    def on_check_slave_resp(self, resp):
-        self.up.logger.debug('on_check_slave_resp')
-        self.up.info['check_slave_resp'] = resp
-        self.up.events['check_slave'].set()
-
-    def on_get_cores_resp(self, resp):
-        self.up.logger.debug('on_get_cores_resp')
-        if 'get_cores' in self.up.events:
-            self.up.info['get_cores_resp'] = resp
-            self.up.events['get_cores'].set()
-        else:
-            self.up.nb_queue.put(('get_cores_resp', resp))
-
-    def on_freeze_resp(self, resp):
-        self.up.logger.debug('on_freeze_resp')
-        self.up.info['freeze_resp'].append(resp)
-        self.up.info['freeze_count'] -= 1
-        if self.up.info['freeze_count'] <= 0:
-            self.up.events['freeze'].set()
-
-    def on_ver_mismatch(self, version):
-        print('Warning: Version mismatch. Local version: {}. '
-              'Master version: {}. Please reconfigure waldorf!'
-              .format(waldorf.__version__, version))
-
-    def on_check_ver_resp(self, version):
-        self.up.logger.debug('on_check_ver_resp')
-        self.up.info['check_ver_resp'] = version
-        self.up.events['check_ver'].set()
-
-    def on_gen_git_c_resp(self, resp):
-        self.up.logger.debug('on_gen_git_c_resp')
-        self.up.info['gen_git_c_resp'] = resp
-        self.up.events['gen_git_c'].set()
+        self.pvte_info.sio.disconnect()
+        self.logger.debug('Send signal to main process.')
+        self.nb_queue.put((WaldorfAPI.EXIT, 0))
+        self.logger.debug('Loop end')
 
 
 class SioResultThread(threading.Thread):
     """Handling result from sio using a queue."""
 
-    def __init__(self, up, nb_queue, sema):
+    def __init__(self, up, nb_queue, events):
         super(SioResultThread, self).__init__()
         self.up = up
         self.nb_queue = nb_queue
-        self.sema = sema
+        self.events = events
         self.daemon = True
 
     def run(self):
-        while True:
+        assert isinstance(self.up, WaldorfClient)
+        while self.up.running:
             resp, result = self.nb_queue.get()
-            if resp == 'get_cores_resp':
-                if self.up.limit == 0:
-                    self.sema.set_value(result)
+            if resp == WaldorfAPI.GET_INFO:
+                key = WaldorfAPI.GET_INFO
+                assert isinstance(result, MasterPublInfo)
+                self.up.remote_info = result
+                self.events[key].set()
+            if resp == WaldorfAPI.SET_LIMIT:
+                key = WaldorfAPI.SET_LIMIT
+                if key in self.events:
+                    self.events[key].set()
+            if resp == WaldorfAPI.SYNC:
+                key = WaldorfAPI.SYNC
+                self.events[key].set()
+            if resp == WaldorfAPI.EXIT:
+                key = WaldorfAPI.EXIT
+                self.events[key].set()
 
 
 class CallbackThread(threading.Thread):
@@ -537,23 +541,22 @@ class CallbackThread(threading.Thread):
     problems on Celery's tcp stream. So we add this to get results one by one.
     """
 
-    def __init__(self, submit_q, callbacks, sema):
+    def __init__(self, up, submit_q, callbacks):
         super(CallbackThread, self).__init__()
+        self.up = up
         self.submit_q = submit_q
         self.callbacks = callbacks
-        self.sema = sema
         self.daemon = True
 
     def run(self):
-        while True:
+        assert isinstance(self.up, WaldorfClient)
+        while self.up.running:
             task_uid, result = self.submit_q[0].get()
             if self.callbacks[task_uid]:
                 self.callbacks[task_uid](result=result)
             else:
                 self.submit_q[1].put(result)
             self.callbacks.pop(task_uid, None)
-            if self.sema:
-                self.sema.release()
 
 
 # Create a decorator to handle exceptions in functions gracefully
@@ -564,13 +567,19 @@ def handle_with(*exceptions):
             try:
                 return f(*args, **kwargs)
             except exceptions as e:
-                return args[0].interrupt_close()
+                return args[0].interrupt_close(e)
             except Exception as e:
                 raise e
 
         return func
 
     return decorator
+
+
+class TaskState(object):
+    IDLE = 0
+    FREEZE = 1
+    RUNNING = 2
 
 
 class WaldorfClient(object):
@@ -581,33 +590,72 @@ class WaldorfClient(object):
 
         Args:
             cfg: Configuration of Waldorf.
-            limit: Limitation of submitting jobs simultaneously.
         """
+        # S0: Setup client.
         self.cfg = cfg
-        self.limit = self.cfg.submit_limit
+
+        self._local_limit = self.cfg.submit_limit
+        assert isinstance(self._local_limit, int), \
+            'Limit should be int!'
+        self.remote_info = None
+        self.require_sync = False
+        self.running = True
+        self._task_num = 0
+        self._task_state = TaskState.IDLE
+        self._limit = 1 if self._local_limit == -1 \
+            else self._local_limit
+
+        # S0.1: Collect information.
+        self.waldorf_info = ClientPublInfo()
+        self.waldorf_info.cfg = self.cfg
+        self.remote_info = MasterPublInfo()
+
+        # S0.2: Setup information queues.
         self._sio_queue = [mp.Queue(), mp.Queue()]
         self._submit_queue = [mp.Queue(), mp.Queue()]
         self._sio_noblock_queue = mp.Queue()
+
+        # S0.3: Use no-blocking queue to collect result from socketio process.
+        self._events = {WaldorfAPI.EXIT: threading.Event()}
+        SioResultThread(
+            self, self._sio_noblock_queue, self._events).start()
+
+        # S0.4: Setup socketio client.
+        key = WaldorfAPI.GET_INFO
+        self._events[key] = threading.Event()
+        key = WaldorfAPI.SYNC
+        self._events[key] = threading.Event()
+        self._sio_queue[0].put(self.waldorf_info)
         self._sio_queue[0].put(self.cfg)
         self._sio_p = _WaldorfSio(self._sio_queue, self._submit_queue,
                                   self._sio_noblock_queue)
         self._sio_p.start()
-        self.callbacks = {}
-        self._sema = None
-        self.slave_num = None
-        self.is_freeze = False
-        version = self.check_ver()
-        if version != waldorf.__version__:
-            raise Exception('Version mismatch. Local version: {}. '
-                            'Master version: {}.'
-                            .format(waldorf.__version__, version))
-        if self.limit > 0:
-            self._sema = DSemaphore(self.limit)
-        else:
-            self._sema = DSemaphore(self.get_cores())
-        SioResultThread(self, self._sio_noblock_queue, self._sema).start()
-        CallbackThread(self._submit_queue, self.callbacks,
-                       self._sema).start()
+
+        # S3: Setup rest parts.
+        # S3.1: Wait until receive information from master.
+        key = WaldorfAPI.GET_INFO
+        self._events[key].wait()
+        key = WaldorfAPI.SYNC
+        self._events[key].wait()
+        # Check version
+        if self.remote_info.version != self.waldorf_info.version:
+            print('Warning: Version mismatch! Local version: {}. '
+                  'Master version: {}. Please reconfigure waldorf!'
+                  .format(self.waldorf_info.version,
+                          self.remote_info.version))
+            self.running = False
+            self._sio_p.terminate()
+            raise Exception(
+                'Version mismatch. Local version: {}.'
+                ' Master version: {}.'
+                    .format(self.waldorf_info.version,
+                            self.remote_info.version)
+            )
+
+    def _setup_callback(self):
+        self._callbacks = {}
+        CallbackThread(
+            self, self._submit_queue, self._callbacks).start()
 
     def _put(self, cmd: str, args=None):
         self._sio_queue[0].put((cmd, args))
@@ -615,45 +663,17 @@ class WaldorfClient(object):
     def _get(self):
         return self._sio_queue[1].get()
 
-    @handle_with(KeyboardInterrupt)
+    @handle_with(KeyboardInterrupt, AssertionError)
     def echo(self):
         """Send echo message to test connections.
 
         This is just used for test.
         """
-        if self.slave_num is None:
-            self.check_slave()
-        assert self.slave_num > 0, 'No slave available'
-        self._put(_WaldorfAPI.ECHO)
+        assert self.remote_info.slave_num > 0, 'No slave available'
+        self._put(WaldorfAPI.ECHO)
         return self._get()
 
-    @handle_with(KeyboardInterrupt)
-    def check_ver(self):
-        """Request for checking waldorf version."""
-        self._put(_WaldorfAPI.CHECK_VER)
-        return self._get()
-
-    @handle_with(KeyboardInterrupt)
-    def get_cores(self):
-        """Get total cores."""
-        self._put(_WaldorfAPI.GET_CORES)
-        return self._get()
-
-    @handle_with(KeyboardInterrupt)
-    def check_slave(self):
-        """Check number of connected slaves.
-
-        Waldorf will automatically check slaves
-        before running any slave related API.
-
-        Returns:
-            Number of connected slaves
-        """
-        self._put(_WaldorfAPI.CHECK_SLAVE)
-        self.slave_num = self._get()
-        return self.slave_num
-
-    @handle_with(KeyboardInterrupt)
+    @handle_with(KeyboardInterrupt, AssertionError)
     def get_env(self, name, pairs, suites):
         """Setup environment.
 
@@ -671,13 +691,14 @@ class WaldorfClient(object):
             it denotes an exception was raised. Second is the message.
 
         """
-        if self.slave_num is None:
-            self.check_slave()
-        assert self.slave_num > 0, 'No slave available'
-        self._put(_WaldorfAPI.GET_ENV, (name, pairs, suites, self.cfg))
-        return self._get()
+        # S4: Setup environment.
+        assert self.remote_info.slave_num > 0, 'No slave available'
+        self._put(WaldorfAPI.GET_ENV, (name, pairs, suites, self.cfg))
+        resp = self._get()
+        for _resp in resp:
+            assert _resp.code == 0, _resp
 
-    @handle_with(KeyboardInterrupt)
+    @handle_with(KeyboardInterrupt, AssertionError)
     def reg_task(self, task, opts=None):
         """Register task on slaves.
 
@@ -686,9 +707,8 @@ class WaldorfClient(object):
             opts: Options to register this task. This options is used by Celery.
 
         """
-        if self.slave_num is None:
-            self.check_slave()
-        assert self.slave_num > 0, 'No slave available'
+        # S5: Register task.
+        assert self.remote_info.slave_num > 0, 'No slave available'
         if opts is None:
             opts = {}
         # Right now it won't check if the task can be callable.
@@ -696,24 +716,38 @@ class WaldorfClient(object):
         lines = inspect.getsourcelines(task)[0]
         lines[0] = lines[0].lstrip()
         task_code = '\n' + ''.join(lines)
-        self._put(_WaldorfAPI.REG_TASK, (task_name, task_code, opts))
+        self._put(WaldorfAPI.REG_TASK, (task_name, task_code, opts))
         return self._get()
 
-    @handle_with(KeyboardInterrupt)
+    @handle_with(KeyboardInterrupt, AssertionError)
     def freeze(self):
         """Freeze task configuration.
 
         This will do the actual task registration and start Celery worker.
         """
-        if self.slave_num is None:
-            self.check_slave()
-        assert self.slave_num > 0, 'No slave available'
-        self._put(_WaldorfAPI.FREEZE)
+        # S6: Freeze.
+        assert self.remote_info.slave_num > 0, 'No slave available'
+        assert self._task_state == TaskState.IDLE, \
+            'Can not freeze more than one time'
+        self._put(WaldorfAPI.FREEZE)
         r = self._get()
-        self.is_freeze = True
+        self._task_state = TaskState.FREEZE
+        self._setup_callback()
         return r
 
-    @handle_with(KeyboardInterrupt)
+    @handle_with(KeyboardInterrupt, AssertionError)
+    def set_task_num(self, task_num):
+        assert self._task_state >= TaskState.FREEZE, \
+            'Run freeze first'
+        self._task_num = task_num
+        self._task_state = TaskState.RUNNING
+        key = WaldorfAPI.SET_LIMIT
+        self._events[key] = threading.Event()
+        self._put(key, (task_num, 'set task num'))
+        self._events[key].wait()
+        self._events.pop(key)
+
+    @handle_with(KeyboardInterrupt, AssertionError)
     def submit(self, task, args, callback=None, smooth=False):
         """Submit one job.
 
@@ -728,28 +762,40 @@ class WaldorfClient(object):
             If callback presents, it will return None.
 
         """
-        assert self.is_freeze, 'Run freeze first'
+        # S7: Submit task.
+        assert self._task_state >= TaskState.FREEZE, \
+            'Run freeze first'
+        assert self._task_state >= TaskState.RUNNING, \
+            'Set task number first'
+
+        self._task_num -= 1
+        assert self._task_num >= 0, 'Set the right task number'
+        if self._task_num == 0:
+            self._task_state = TaskState.FREEZE
+
         task_uid = str(uuid.uuid4())
         if callback:
-            if self._sema:
-                self._sema.acquire()
             if smooth:
                 time.sleep(0.01)
-            self.callbacks[task_uid] = callback
-            self._put(_WaldorfAPI.SUBMIT, (task_uid, task.__name__, args))
+            self._callbacks[task_uid] = callback
+            self._put(WaldorfAPI.SUBMIT,
+                      (task_uid, task.__name__, args))
             self._get()
         else:
-            self.callbacks[task_uid] = None
-            self._put(_WaldorfAPI.SUBMIT, (task_uid, task.__name__, args))
+            self._callbacks[task_uid] = None
+            self._put(WaldorfAPI.SUBMIT,
+                      (task_uid, task.__name__, args))
             self._get()
             return self._submit_queue[1].get()
 
-    @handle_with(KeyboardInterrupt)
+    @handle_with(KeyboardInterrupt, AssertionError)
     def test_submit(self, task, args, callback=None, smooth=False):
         """Test submission.
 
         This is only used for test.
         """
+        assert self._task_state >= TaskState.FREEZE, \
+            'Run freeze first'
         if callback:
             result = task(args)
             callback(result)
@@ -758,8 +804,9 @@ class WaldorfClient(object):
 
     @handle_with(KeyboardInterrupt)
     def join(self):
-        """Block until all result is handled by the callback function."""
-        while len(self.callbacks.keys()) != 0:
+        """Block until all result is handled by callback function.
+         """
+        while len(self._callbacks.keys()) != 0:
             time.sleep(0.1)
 
     @handle_with(KeyboardInterrupt)
@@ -767,7 +814,8 @@ class WaldorfClient(object):
         """Generate git credential file.
 
         This is used for avoiding put any sensitive information
-        in the project folder. Check out example/gen_git_c_demo.py for usage.
+        in the project folder.
+        Check out example/gen_git_c_demo.py for usage.
 
         Args:
             info: git credential information
@@ -775,16 +823,18 @@ class WaldorfClient(object):
         Returns:
             bytes: Encrypted git credential information
         """
-        self._put(_WaldorfAPI.GEN_GIT_C, (info,))
+        self._put(WaldorfAPI.GEN_GIT_C, (info,))
         return self._get()
 
-    def interrupt_close(self):
+    def interrupt_close(self, e):
         """Clean up while catching keyboard interrupt"""
-        self._put(_WaldorfAPI.CLEAN_UP)
-        time.sleep(0.1)
-        raise KeyboardInterrupt
+        if not self._events[WaldorfAPI.EXIT].is_set():
+            self._put(WaldorfAPI.EXIT)
+            self._events[WaldorfAPI.EXIT].wait()
+        raise e
 
     def close(self):
         """Clean up while closing."""
-        self._put(_WaldorfAPI.CLEAN_UP)
-        time.sleep(0.1)
+        if not self._events[WaldorfAPI.EXIT].is_set():
+            self._put(WaldorfAPI.EXIT)
+            self._events[WaldorfAPI.EXIT].wait()

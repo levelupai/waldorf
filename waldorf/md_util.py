@@ -3,8 +3,6 @@ CSS_HEAD = """<head>
 </head>
 """
 
-import markdown
-
 
 class Element(object):
     def render(self):
@@ -32,11 +30,12 @@ class Table(Element):
     def __init__(self):
         self.objects = {}
 
-    def set_head(self, head: list):
-        self.head = head
+    def set_header(self, header: list):
+        self.header = header
 
     def update_object(self, key: str, properties: dict):
-        self.objects.update({key: properties})
+        ordered = dict([(k, properties[k]) for k in self.header])
+        self.objects.update({key: ordered})
 
     def remove_object(self, key):
         if key in self.objects:
@@ -44,16 +43,16 @@ class Table(Element):
 
     def to_dict(self):
         return {
-            'head': self.head,
+            'head': self.header,
             'objects': self.objects
         }
 
     def render(self):
-        md = 'Index|' + '|'.join(self.head) + '\n'
-        md += '|'.join(['-'] * (len(self.head) + 1)) + '\n'
+        md = 'Index|' + '|'.join(self.header) + '\n'
+        md += '|'.join(['-'] * (len(self.header) + 1)) + '\n'
         for idx, obj in enumerate(self.objects.values()):
             attr = []
-            for h in self.head:
+            for h in self.header:
                 attr.append(str(obj[h]))
             md += str(idx + 1) + '|' + '|'.join(attr) + '\n'
         return md
@@ -76,6 +75,7 @@ class MarkdownGenerator(object):
         return md
 
     def render(self, css=None):
+        import markdown
         if css:
             head = CSS_HEAD.format(css)
         else:

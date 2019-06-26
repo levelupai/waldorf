@@ -29,9 +29,9 @@ class WaldorfCfg(object):
                 this ip will be set to the master ip.
             backend_ip: backend ip used by celery workers. If None is given,
                 this ip will be set to the master ip.
-            broker: broker type, support `rabbit` and `redis`,
-                default is `redis`
-            backend: backend type, support `redis` and `memcache`,
+            broker: broker type, only support `redis`,
+                the default is `redis`
+            backend: backend type, only support `redis`,
                 the default is `redis`
             debug: whether you need debug output, 0 - no debug, 1 - verbose,
                 2 - even more verbose
@@ -52,20 +52,18 @@ class WaldorfCfg(object):
         self.backend = backend
         self.debug = debug
         self.waldorf_port = 61801
-        self.rabbit_user = 'waldorf'
-        self.rabbit_pwd = 'waldorf'
-        self.rabbit_port = 5672
         self.redis_port = 6379
-        self.memcached_port = 11211
         self.core = mp.cpu_count()
         self.get_interval = 0.1
-        self.submit_limit = 0
+        self.submit_limit = -1
+        self.limit_bias = 0.1
+        self.prefetch_multi = 1
         self.result_timeout = 300
         # If retry is not enabled
         # it will return None when result is not available
         # It only work for timeout situation
         self.retry_enable = True
-        self.retry_times = 3
+        self.retry_times = 10
         self.env_cfg = WaldorfEnvCfg()
 
     def set_ip(self, master_ip=None, broker_ip=None, backend_ip=None):
@@ -100,17 +98,12 @@ class WaldorfCfg(object):
         """
         self.celery = {
             'broker': {
-                'rabbit': 'amqp://{}:{}@{}:{}'.format(
-                    self.rabbit_user, self.rabbit_pwd,
-                    self.broker_ip, self.rabbit_port),
                 'redis': 'redis://{}:{}'.format(self.broker_ip,
                                                 self.redis_port)
             },
             'backend': {
                 'redis': 'redis://{}:{}'.format(self.backend_ip,
                                                 self.redis_port),
-                'memcached': 'cache+memcached://{}:{}'.
-                    format(self.backend_ip, self.memcached_port)
             }
         }
         self.celery_broker = self.celery['broker'][self.broker]

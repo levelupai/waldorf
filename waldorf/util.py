@@ -1,5 +1,11 @@
 import logging
 
+__all__ = ['get_path', 'get_timestamp', 'get_run_timestamp',
+           'get_system_info', 'get_network_info',
+           'obj_encode', 'obj_decode', 'round2',
+           'get_frame', 'init_logger', 'DummyLogger', 'Dummytqdm',
+           'ColoredFormatter', 'get_linenumber', 'get_func_name']
+
 
 def get_path(name='log', abspath=None, relative_path=None, _file=None):
     """Create path if path don't exist
@@ -45,8 +51,11 @@ import re
 from collections import namedtuple
 import datetime
 
-SystemInfo = namedtuple('SystemInfo', ['os', 'cpu_type', 'cpu_count', 'mem'])
-get_run_timestamp = lambda: datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+SystemInfo = namedtuple('SystemInfo',
+                        ['os', 'cpu_type', 'cpu_count', 'mem'])
+NetworkInfo = namedtuple('NetworkInfo', ['ip', 'hostname'])
+get_run_timestamp = lambda: datetime.datetime.now().strftime(
+    "%Y%m%d_%H%M%S")
 
 
 def get_system_info():
@@ -85,30 +94,50 @@ def get_system_info():
                 break
     mem = '%.1f GB' % _mem_gb
 
-    return SystemInfo(os, cpu_type, str(cpu_count), mem)
+    return SystemInfo(os, cpu_type, cpu_count, mem)
+
+
+def get_network_info():
+    import socket
+    lan_ip = get_local_ip()
+    hostname = socket.gethostname()
+    return NetworkInfo(lan_ip, hostname)
 
 
 import base64
 import pickle
+import zlib
 
 
 def obj_encode(obj):
-    return base64.b64encode(pickle.dumps(obj)).decode()
+    return base64.b64encode(zlib.compress(pickle.dumps(obj), 9)).decode()
 
 
 def obj_decode(obj):
-    return pickle.loads(base64.b64decode(obj))
+    return pickle.loads(zlib.decompress(base64.b64decode(obj)))
 
 
 def get_local_ip():
     import socket
-    lan_ip = (([ip for ip in socket.gethostbyname_ex(socket.gethostname())[2]
-                if not ip.startswith('127.')]
-               or [[(s.connect(('8.8.8.8', 53)), s.getsockname()[0], s.close())
-                    for s in [socket.socket(socket.AF_INET,
-                                            socket.SOCK_DGRAM)]][0][1]])
-              + ['no IP found'])[0]
+    lan_ip = \
+        (([ip for ip in socket.gethostbyname_ex(
+            socket.gethostname())[2]
+           if not ip.startswith('127.')]
+          or [[(s.connect(('8.8.8.8', 53)),
+                s.getsockname()[0], s.close())
+               for s in [
+                   socket.socket(
+                       socket.AF_INET, socket.SOCK_DGRAM)]][0][1]])
+         + ['no IP found'])[0]
     return lan_ip
+
+
+import math
+
+
+def round2(x, d=0):
+    p = 10 ** d
+    return float(math.floor((x * p) + math.copysign(0.5, x))) / p
 
 
 BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = range(8)
@@ -189,7 +218,8 @@ def init_logger(name, path=None, level=(logging.INFO, logging.DEBUG),
     if enable[0]:
         _cf = ['$GREEN[%(asctime)s]$RESET',
                '[%(name)s]',
-               '$BLUE[%(filename)20s:%(funcName)15s:%(lineno)5d]$RESET',
+               '$BLUE[%(filename)20s:'
+               '%(funcName)15s:%(lineno)5d]$RESET',
                '[%(levelname)s]',
                ' $CYAN%(message)s$RESET']
         cformatter = ColoredFormatter('-'.join(_cf))
@@ -205,9 +235,8 @@ def init_logger(name, path=None, level=(logging.INFO, logging.DEBUG),
                '[%(levelname)s]',
                ' %(message)s']
         nformatter = logging.Formatter('-'.join(_nf))
-        rf = logging.handlers.RotatingFileHandler(path,
-                                                  maxBytes=50 * 1024 * 1024,
-                                                  backupCount=5)
+        rf = logging.handlers.RotatingFileHandler(
+            path, maxBytes=50 * 1024 * 1024, backupCount=5)
         rf.setLevel(level[1])
         rf.setFormatter(nformatter)
         logger.addHandler(rf)
@@ -381,3 +410,16 @@ class Dummytqdm(object):
 
     def refresh(self, nolock=False):
         pass
+
+
+from inspect import currentframe
+
+
+def get_linenumber():
+    cf = currentframe()
+    return cf.f_back.f_lineno
+
+
+def get_func_name():
+    import sys
+    return sys._getframe(1).f_code.co_name

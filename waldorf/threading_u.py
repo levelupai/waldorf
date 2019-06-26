@@ -29,9 +29,16 @@ class DSemaphore(Semaphore):
                 rc = True
         return rc
 
-
     def set_value(self, new_value):
         with self._cond:
             self._value += new_value - self._max_value
             self._cond.notify()
         self._max_value = new_value
+
+    @property
+    def value(self):
+        return int(self._value)
+
+    @property
+    def remain(self):
+        return int(self._max_value - self._value)
