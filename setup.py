@@ -19,7 +19,7 @@ setup(
     install_requires=[
         'virtualenv>=16.5.0',
         'psutil>=5.6.2',
-        'aiohttp==3.1.3',
+        'aiohttp==3.7.4',
         'celery>=4.3.0',
         'python-socketio>=4.0.1',
         'tqdm>=4.23.3',
